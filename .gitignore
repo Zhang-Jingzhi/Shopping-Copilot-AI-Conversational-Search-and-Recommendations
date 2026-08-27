@@ -203,6 +203,13 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# Project-local generated outputs and large downloaded data
+results.json
+intent_router_results.json
+data/catalog.jsonl
+data/catalog.jsonl.gz
+SHA256SUMS
+
 # Ruff stuff:
 .ruff_cache/
 
