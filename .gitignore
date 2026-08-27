@@ -208,6 +208,10 @@ results.json
 intent_router_results.json
 data/catalog.jsonl
 data/catalog.jsonl.gz
+intent-recognition/results.json
+intent-recognition/intent_router_results.json
+intent-recognition/data/catalog.jsonl
+intent-recognition/data/catalog.jsonl.gz
 SHA256SUMS
 
 # Ruff stuff:
