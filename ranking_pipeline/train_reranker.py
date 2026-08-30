@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import random
+from datetime import datetime
 from pathlib import Path
 
 from ranking_pipeline.qwen_reranker import DEFAULT_MODEL, format_pair
@@ -41,7 +42,20 @@ DEFAULT_SYNTHETIC_TIERS = (
 DEFAULT_SYNTHETIC_PRODUCTS = (
     REPOSITORY_ROOT / "synthetic-data-3021" / "data" / "product_filter_inference_3021.csv"
 )
-DEFAULT_OUTPUT = REPOSITORY_ROOT / "ranking_pipeline" / "checkpoints" / "qwen3-reranker-0.6b-shopping"
+CHECKPOINT_ROOT = REPOSITORY_ROOT / "ranking_pipeline" / "checkpoints"
+
+LORA_R = 8
+LORA_ALPHA = 16
+LORA_DROPOUT = 0.05
+LORA_TARGET_MODULES = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--synthetic-products", type=Path, default=DEFAULT_SYNTHETIC_PRODUCTS)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--base-model", default=DEFAULT_MODEL)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
@@ -104,37 +118,46 @@ def _split_examples(examples: list[RerankTrainingExample], fraction: float, seed
     return train, valid
 
 
-def _classifier_parameter(name: str) -> bool:
-    lowered = name.lower()
-    return any(
-        marker in lowered
-        for marker in ("classifier", "score", "classifier_out", "pooler")
+def build_checkpoint_output(args: argparse.Namespace, summary: dict) -> Path:
+    if args.output is not None:
+        return args.output
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    public_accuracy = float(summary.get("best_public_accuracy") or 0.0)
+    return (
+        CHECKPOINT_ROOT
+        / (
+            "0.6Blora"
+            f"_{timestamp}"
+            f"_pubacc{public_accuracy:.3f}"
+            f"_ep{args.epochs}"
+            f"_lr{args.learning_rate:g}"
+        )
     )
 
 
-def _load_model(model_name: str, device: str):
+def _load_peft_model(model_name: str, device: str):
     import torch
+    from peft import LoraConfig, TaskType, get_peft_model
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    # Use fp32 for the trainable classifier so gradients stay stable without
-    # mixed-precision master weights. The 0.6B trunk still fits comfortably in
-    # a 6GB consumer GPU for small batch sizes.
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    lora_config = LoraConfig(
+        r=LORA_R,
+        lora_alpha=LORA_ALPHA,
+        lora_dropout=LORA_DROPOUT,
+        bias="none",
+        task_type=TaskType.SEQ_CLS,
+        target_modules=list(LORA_TARGET_MODULES),
+        modules_to_save=["score"],
+    )
+    model = get_peft_model(model, lora_config)
     model.to(device)
-    trainable_count = 0
-    for name, parameter in model.named_parameters():
-        requires_grad = _classifier_parameter(name)
-        parameter.requires_grad = requires_grad
-        trainable_count += int(requires_grad)
-    if trainable_count == 0:
-        # Fall back to all parameters if this conversion exposes no conventional
-        # classifier name. This is a safeguard, not the intended path.
-        for parameter in model.parameters():
-            parameter.requires_grad = True
-        trainable_count = sum(parameter.numel() for parameter in model.parameters())
+    trainable_count = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
     model.train()
     return tokenizer, model, trainable_count
 
@@ -236,7 +259,7 @@ def train(args: argparse.Namespace) -> None:
         return
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer, model, trainable_count = _load_model(args.base_model, device)
+    tokenizer, model, trainable_count = _load_peft_model(args.base_model, device)
     summary["trainable_parameters"] = trainable_count
     print(json.dumps({"trainable_parameters": trainable_count, "device": device}))
 
@@ -301,14 +324,22 @@ def train(args: argparse.Namespace) -> None:
     summary["best_public_accuracy"] = round(best_public_accuracy, 6)
     summary["selected_epoch"] = selected_epoch
 
-    args.output.mkdir(parents=True, exist_ok=True)
-    tokenizer.save_pretrained(args.output)
-    model.save_pretrained(args.output)
-    (args.output / "training_summary.json").write_text(
+    output = build_checkpoint_output(args, summary)
+    output.mkdir(parents=True, exist_ok=True)
+    tokenizer.save_pretrained(output)
+    model.save_pretrained(output)
+    summary["lora"] = {
+        "r": LORA_R,
+        "lora_alpha": LORA_ALPHA,
+        "lora_dropout": LORA_DROPOUT,
+        "target_modules": list(LORA_TARGET_MODULES),
+        "modules_to_save": ["score"],
+    }
+    (output / "training_summary.json").write_text(
         json.dumps(summary, indent=2) + "\n",
         encoding="utf-8",
     )
-    print(f"Saved checkpoint to {args.output}")
+    print(f"Saved checkpoint to {output}")
 
 
 def evaluate(tokenizer, model, examples, device, max_length, batch_size) -> float:

@@ -10,8 +10,10 @@ relevance head.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from techjam_agent.contracts import Candidate, Requirements
@@ -113,7 +115,17 @@ class Qwen3Reranker:
         if self.loaded:
             return
         import torch
+        from peft import PeftModel
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        model_path = Path(self.model_name_or_path)
+        adapter_config_path = model_path / "adapter_config.json"
+        is_adapter = model_path.is_dir() and adapter_config_path.exists()
+        if is_adapter:
+            adapter_config = json.loads(adapter_config_path.read_text(encoding="utf-8"))
+            base_model_name = adapter_config.get("base_model_name_or_path") or DEFAULT_MODEL
+        else:
+            base_model_name = self.model_name_or_path
 
         self._tokenizer = AutoTokenizer.from_pretrained(
             self.model_name_or_path,
@@ -126,10 +138,14 @@ class Qwen3Reranker:
         model_kwargs: dict[str, Any] = {}
         if self.device == "cuda":
             model_kwargs["torch_dtype"] = torch.float16
-        self._model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_name_or_path,
+        base_model = AutoModelForSequenceClassification.from_pretrained(
+            base_model_name,
             **model_kwargs,
         )
+        if is_adapter:
+            self._model = PeftModel.from_pretrained(base_model, str(model_path))
+        else:
+            self._model = base_model
         self._model.to(self.device)
         self._model.eval()
 

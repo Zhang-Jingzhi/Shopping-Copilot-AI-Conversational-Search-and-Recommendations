@@ -22,7 +22,7 @@ DEFAULT_RERANKER_MODEL = (
     REPOSITORY_ROOT
     / "ranking_pipeline"
     / "checkpoints"
-    / "qwen3-reranker-0.6B-shopping"
+    / "qwen3-reranker-0.6B-shopping-lora"
 )
 
 

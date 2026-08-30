@@ -20,6 +20,14 @@ the local BGE dense embeddings and catalog assets.
 official dense path with BGE small embeddings. `retrieval-mode=lite` is
 the local non-dense smoke path.
 
+## Metrics
+
+- Hit@10: target appears in the first 10 recommendations.
+- MRR: mean `1 / best_rank`; zero when the target is never returned.
+- MTTC: mean first-hit turn; a miss counts as `11`, so lower is better.
+- Efficiency: `clamp((11 - MTTC) / 10, 0, 1)`.
+- Technical: `0.50 * Hit@10 + 0.30 * MRR + 0.20 * Efficiency`.
+
 ## Key Findings
 
 - `locked-exact` is currently the strongest submission configuration:

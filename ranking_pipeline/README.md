@@ -22,6 +22,7 @@ ranking_pipeline/
   training_data.py      public/synthetic pair construction
   distribution_alignment.py aligned public+3021 training data
   train_reranker.py     scoring-head training script
+  convert_full_to_lora.py convert old full checkpoint to LoRA adapter
   evaluate_agent.py     official evaluator wrapper
   analyze_cutoff.py     offline Top20/Top50 recall check
   diagnose_synthetic.py synthetic 3,021 diagnostic summarizer
@@ -35,6 +36,9 @@ bootstrapping is kept in `retrieval-and-reranking/techjam_agent/__init__.py`
 and this package's `__init__.py`, so both the official evaluator and this
 package can be launched from their natural working directories without setting
 `PYTHONPATH`.
+
+`checkpoints/` is local-only and ignored by `ranking_pipeline/.gitignore`.
+Do not commit model weights; install or re-train them on each machine.
 
 ## Model Decision
 
@@ -78,7 +82,7 @@ and small-model ranking noise.
 From the repository root:
 
 ```powershell
-python -m pip install torch transformers
+python -m pip install torch transformers peft
 python -m unittest discover -s ranking_pipeline/tests -t . -v
 ```
 
@@ -89,8 +93,11 @@ official `participant-kit` GitHub Release into
 ## Train The Scoring Head
 
 The official scope permits local scoring logic and prompt tuning, while
-full-parameter training of base foundation models is out of scope. This script
-freezes the transformer trunk and trains only the `score` classifier parameter.
+full-parameter training of base foundation models is out of scope. Training now
+uses PEFT LoRA: the base transformer stays frozen, LoRA trains the attention
+and MLP projections, and `score` is saved as a `modules_to_save` head. Only
+`adapter_model.safetensors`, `adapter_config.json`, and tokenizer files are
+written; the frozen backbone is not re-saved.
 
 The default `aligned` strategy combines the public 200 gold set with the
 synthetic 3,021 proxy set. The synthetic proxy is public-schema compatible but
@@ -112,8 +119,25 @@ python -m ranking_pipeline.train_reranker `
   --negatives-per-positive 4 `
   --synthetic-negatives-per-positive 4 `
   --max-length 512 `
-  --output ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping
+  --output ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping-lora
 ```
+
+`Qwen3Reranker.load` detects a local `adapter_config.json`, loads the base model
+from the recorded `base_model_name_or_path`, then attaches the adapter with
+`PeftModel.from_pretrained`.
+
+If you still have an old full checkpoint, convert it once:
+
+```powershell
+python -m ranking_pipeline.convert_full_to_lora `
+  --checkpoint ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping `
+  --output ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping-lora `
+  --device cpu
+```
+
+The old full backbone was frozen during training, so copying its `score` head
+into a LoRA-wrapped base model reproduces the same effective checkpoint while
+reducing the stored model from about `2.27 GB` to about `20 MB`.
 
 Set `--data-strategy public` for the previous public-200-only run, or
 `--data-strategy synthetic` for a synthetic-only dry run/ablation. The old
@@ -159,6 +183,59 @@ python -m ranking_pipeline.evaluate_agent --mode local --retrieval-mode lite
 python -m ranking_pipeline.evaluate_agent --mode local --retrieval-mode lite `
   --use-state-memory --use-intent-router
 ```
+
+## Output Contract
+
+`RankingAgent.respond` returns an evaluator-compatible response, not a raw
+candidate set:
+
+```json
+{
+  "message": "Here are the best matches for all requirements you shared.",
+  "ask_attribute": null,
+  "recommendations": [
+    {"parent_asin": "P103"},
+    {"parent_asin": "P028"},
+    {"parent_asin": "P901"}
+  ],
+  "usage": {"prompt_tokens": 0, "completion_tokens": 0}
+}
+```
+
+`recommendations` is already ordered. The evaluator preserves that order and
+takes up to the first 10 valid IDs. For `locked-exact`, the order comes from
+`LockedWeightedRrfTop10Reranker`'s weighted-RRF score, descending. Internally
+the reranker also keeps `rank`, `score`, and `evidence`, but the agent boundary
+only exposes the evaluator's required `parent_asin` list.
+
+## Metrics
+
+- Hit@10: fraction of sessions where the ground-truth `parent_asin` appears in
+  the first 10 recommendations.
+- MRR: mean of `1 / best_rank`; zero when the target is never returned.
+- MTTC: mean first-hit turn. A miss counts as `MAX_TURNS + 1` (`11`), so lower
+  is better.
+- Efficiency: `clamp((11 - MTTC) / 10, 0, 1)`.
+- Technical: `0.50 * Hit@10 + 0.30 * MRR + 0.20 * Efficiency`.
+
+## Clarification Policy Behavior
+
+`RecommendationClarificationPolicy` selects `recommend` or `clarify` from:
+
+- the model's `need_clarification` flag,
+- hard-constraint `constraint_conflicts`,
+- the candidate pool's `is_over_general` signal,
+- Top1/Top2 confidence and score margin,
+- attributes already asked, to avoid repeated questions.
+
+A clarification is returned as `ask_attribute` plus `message`, matching the
+official evaluator's dialogue contract. Dynamic rerank selection can fall back
+to locked when the turn is late, hard-hit rate is low, or the candidate pool is
+large.
+
+For component 5 integration, submit `--mode locked --retrieval-mode exact`
+with policy disabled. Keep the policy as an offline/ablation path because on
+the public 200 it raises MTTC to `9.955` and lowers Technical.
 
 ## Context Source
 
