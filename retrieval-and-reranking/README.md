@@ -96,6 +96,24 @@ Exact 与历史结果比较：Top50 候选集合 200/200 一致；Top50 顺序 1
 
 已测试环境：Windows、Python 3.12.13、CPU。
 
+Exact 模式需要以下固定版本：
+
+| 依赖 | 版本 | 用途 |
+|---|---:|---|
+| Python | `>=3.10`，已验证 `3.12.13` | 运行 Agent 与 evaluator |
+| NumPy | `2.5.2` | 读取向量并计算 Dense 相似度 |
+| PyTorch CPU | `2.13.0` | 本地 BGE 编码 |
+| Transformers | `5.16.1` | 本地模型加载 |
+| Sentence Transformers | `6.0.0` | query embedding |
+
+除 Python 包外，Exact 模式还需要：
+
+- 官方 50,000 商品 `data/catalog.jsonl`；
+- `BAAI/bge-small-en-v1.5` 本地模型；
+- 与冻结 catalog 对齐的 embeddings 与 parent-ASIN 顺序文件。
+
+这些大文件不进入 Git。`asset-manifest.json` 记录 ZIP 和关键文件 SHA256，`scripts/install_assets.py` 负责下载、校验和安装。依赖版本同时固定在 `pyproject.toml` 的 `exact` optional dependency 与 `requirements-exact.txt` 中。
+
 Windows 上建议把 venv 放在短路径。PyTorch 包含很深的许可证目录，长项目路径可能触发 `WinError 206`。
 
 ```powershell
