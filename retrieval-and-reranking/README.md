@@ -123,12 +123,24 @@ Exact 模式需要以下固定版本：
 Windows 上建议把 venv 放在短路径。PyTorch 包含很深的许可证目录，长项目路径可能触发 `WinError 206`。
 
 ```powershell
+Set-Location <仓库目录>\retrieval-and-reranking
 py -3.12 -m venv C:\venvs\techjam-agent
 C:\venvs\techjam-agent\Scripts\python.exe -m pip install -e ".[exact]"
-C:\venvs\techjam-agent\Scripts\python.exe -m scripts.install_assets --url <GITHUB_RELEASE_ASSET_URL>
+C:\venvs\techjam-agent\Scripts\python.exe -m scripts.install_assets
 $env:TECHJAM_MODE = "exact"
 C:\venvs\techjam-agent\Scripts\python.exe -m unittest discover -s tests -v
 C:\venvs\techjam-agent\Scripts\python.exe -m scripts.validate_pipeline --mode exact
+```
+
+不要手动解压，也不要把文件放到仓库根目录或 `intent-recognition/`。安装器始终以 `retrieval-and-reranking/` 为根目录，自动生成：
+
+```text
+retrieval-and-reranking/
+├── data/
+│   └── catalog.jsonl
+└── resources/
+    ├── bge-small-en-v1.5/
+    └── dense_catalog_embeddings/
 ```
 
 如果已经下载了资源 ZIP：
@@ -137,6 +149,8 @@ C:\venvs\techjam-agent\Scripts\python.exe -m scripts.validate_pipeline --mode ex
 C:\venvs\techjam-agent\Scripts\python.exe -m scripts.install_assets `
   --archive C:\Downloads\techjam-runtime-assets-v0.1.0.zip
 ```
+
+`--archive` 只需要接收 ZIP 路径；仍由安装器校验并解压到上述固定目录，不需要手动移动文件。
 
 资源 ZIP 为 159.76 MiB，SHA256：
 
