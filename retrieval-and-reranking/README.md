@@ -112,7 +112,13 @@ Exact 模式需要以下固定版本：
 - `BAAI/bge-small-en-v1.5` 本地模型；
 - 与冻结 catalog 对齐的 embeddings 与 parent-ASIN 顺序文件。
 
-这些大文件不进入 Git。`asset-manifest.json` 记录 ZIP 和关键文件 SHA256，`scripts/install_assets.py` 负责下载、校验和安装。依赖版本同时固定在 `pyproject.toml` 的 `exact` optional dependency 与 `requirements-exact.txt` 中。
+以上所有非 Python 运行资源统一打包在团队仓库 GitHub Release 的 `techjam-runtime-assets-v0.1.0.zip` 中，不需要分别访问 Amazon 或 Hugging Face。资源包包含：
+
+- 完整的 `data/catalog.jsonl`；
+- `BAAI/bge-small-en-v1.5` 的权重、tokenizer、config、pooling 配置和模型说明；
+- 冻结 catalog 的 embeddings、parent-ASIN 顺序文件及 Dense manifest。
+
+这些大文件不进入普通 Git 历史。`asset-manifest.json` 记录 Release、ZIP 和关键文件 SHA256，`scripts/install_assets.py` 负责下载、校验和安装。因为团队仓库是 private，普通 URL 如果受到权限限制，安装器会自动调用已经登录的 GitHub CLI；也可以在 GitHub 页面下载 ZIP 后使用 `--archive`。Python 依赖版本固定在 `pyproject.toml` 的 `exact` optional dependency 与 `requirements-exact.txt` 中。
 
 Windows 上建议把 venv 放在短路径。PyTorch 包含很深的许可证目录，长项目路径可能触发 `WinError 206`。
 

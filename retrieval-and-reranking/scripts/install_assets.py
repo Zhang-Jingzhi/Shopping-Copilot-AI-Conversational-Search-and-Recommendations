@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import urllib.request
 import zipfile
@@ -35,6 +36,44 @@ def safe_extract(archive: Path, destination: Path) -> None:
         handle.extractall(destination)
 
 
+def download_archive(manifest: dict, destination: Path, url: str) -> None:
+    """Download a Release asset, with authenticated GitHub CLI fallback."""
+    try:
+        print(f"Downloading {url}")
+        with urllib.request.urlopen(url) as response, destination.open("wb") as output:
+            shutil.copyfileobj(response, output)
+        return
+    except Exception as direct_error:
+        release = manifest.get("github_release", {})
+        repository = release.get("repository")
+        tag = release.get("tag")
+        if not repository or not tag or shutil.which("gh") is None:
+            raise RuntimeError(
+                "Direct download failed. For this private repository, install and "
+                "authenticate GitHub CLI, or download the Release asset in the "
+                "browser and pass its path with --archive."
+            ) from direct_error
+        print("Using authenticated GitHub CLI for the private Release asset.")
+        subprocess.run(
+            [
+                "gh",
+                "release",
+                "download",
+                str(tag),
+                "--repo",
+                str(repository),
+                "--pattern",
+                str(manifest["archive_name"]),
+                "--dir",
+                str(destination.parent),
+                "--clobber",
+            ],
+            check=True,
+        )
+        if not destination.is_file():
+            raise RuntimeError("GitHub CLI completed without downloading the asset")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=False)
@@ -51,9 +90,7 @@ def main() -> None:
             raise SystemExit("Pass --url/--archive or set TECHJAM_ASSET_URL")
         temporary = Path(tempfile.mkdtemp(prefix="techjam-assets-"))
         archive_path = temporary / manifest["archive_name"]
-        print(f"Downloading {url}")
-        with urllib.request.urlopen(url) as response, archive_path.open("wb") as output:
-            shutil.copyfileobj(response, output)
+        download_archive(manifest, archive_path, str(url))
     archive_path = archive_path.resolve()
     actual = sha256(archive_path)
     expected = str(manifest["archive_sha256"]).lower()
