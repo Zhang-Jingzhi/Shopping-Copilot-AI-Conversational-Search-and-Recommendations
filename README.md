@@ -6,4 +6,7 @@ Project files are organized under:
 intent-recognition/
 ```
 
-This folder contains the first part of the project: intent recognition and query routing for conversational shopping search.
+This repository currently contains two independently runnable project parts:
+
+- `intent-recognition/`: intent recognition and query routing.
+- `conversation-state-memory/`: multi-turn state, memory, and dynamic context programming.
