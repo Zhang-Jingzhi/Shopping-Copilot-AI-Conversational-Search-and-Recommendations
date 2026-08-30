@@ -1,0 +1,101 @@
+[
+  {
+    "field": "会话顶层对象",
+    "public_200_observation": "六个字段，且字段顺序固定",
+    "extension_3021_observation": "六个字段及字段顺序完全相同",
+    "generation_or_check": "生成器对字段集合和顺序执行精确断言",
+    "alignment": "完全对齐（接口层）",
+    "evidence_level": "直接可见",
+    "prohibited_claim": "无"
+  },
+  {
+    "field": "商品大类（category_bucket）",
+    "public_200_observation": "200/200 均为 clothing",
+    "extension_3021_observation": "3,021/3,021 均为 clothing",
+    "generation_or_check": "采用公开集观察到的固定值",
+    "alignment": "公开集完全对齐；private 分布不可见",
+    "evidence_level": "直接可见",
+    "prohibited_claim": "不得声称 private 800 也必然全为同一取值。"
+  },
+  {
+    "field": "难度桶（difficulty_bucket）",
+    "public_200_observation": "easy、medium、hard；与场景类别稳定对应",
+    "extension_3021_observation": "同一值域、同一场景→难度映射",
+    "generation_or_check": "按公开集观察到的映射生成",
+    "alignment": "规则对齐",
+    "evidence_level": "公开集规律",
+    "prohibited_claim": "不得声称已获得组织方内部难度标注过程。"
+  },
+  {
+    "field": "目标商品家族 ID（ground_truth.parent_asin）",
+    "public_200_observation": "冻结 catalog 中的一个 parent_asin",
+    "extension_3021_observation": "同一 catalog 与 LLO test 候选宇宙中的唯一 parent_asin",
+    "generation_or_check": "验证 catalog 成员资格与目标唯一性",
+    "alignment": "来源对齐；但不是已知 private 成员",
+    "evidence_level": "直接可追溯",
+    "prohibited_claim": "不得把任一非公开目标称为 private 800 商品。"
+  },
+  {
+    "field": "会话标识（sample_id）",
+    "public_200_observation": "public_XXXX",
+    "extension_3021_observation": "synthetic_contract_XXXX",
+    "generation_or_check": "确定性生成且全局唯一",
+    "alignment": "同一字段角色；标识符有意不同",
+    "evidence_level": "生成产物",
+    "prohibited_claim": "不得据此推断官方会话编号或排序。"
+  },
+  {
+    "field": "会话场景（scenario_type）",
+    "public_200_observation": "buying 80、browsing 80、intent_override 30、boundary 10",
+    "extension_3021_observation": "buying 1,209、browsing 1,208、intent_override 453、boundary 151",
+    "generation_or_check": "按公开比例和固定随机种子分配",
+    "alignment": "类别相同、比例缩放；逐商品分配未知",
+    "evidence_level": "公开集分布规律",
+    "prohibited_claim": "不得声称某个商品在官方数据中属于该场景。"
+  },
+  {
+    "field": "用户历史平均评分（average_prior_rating）",
+    "public_200_observation": "语义上是用户此前购买/交互历史的平均评分；浮点 1–5，计数为 14/9/22/21/134",
+    "extension_3021_observation": "浮点 1–5，计数为 212/136/332/317/2,024；数值只取自该目标在 test 中可观察到的单次互动评分代理",
+    "generation_or_check": "没有可用的用户历史评分序列；仅缩放公开边际分布，并要求代理值在该目标 test 互动中存在",
+    "alignment": "参考的是 Test 最终观察到的单次互动评分，而非历史平均；仅类型、值域和边际分布对齐",
+    "evidence_level": "公开分布 + 目标互动评分代理",
+    "prohibited_claim": "不得称其为真实用户历史平均分，不得用作用户画像或偏好标签真值。"
+  },
+  {
+    "field": "用户偏好标签（preference_tags）",
+    "public_200_observation": "每条含 {1: 6, 2: 43, 3: 30, 4: 121} 个标签",
+    "extension_3021_observation": "每条含 {0: 3021} 个标签，即空列表",
+    "generation_or_check": "源用户、时间与标签算法未公开，因此显式置空而不猜测",
+    "alignment": "未复原，且有意不伪造",
+    "evidence_level": "无直接依据",
+    "prohibited_claim": "不得将空列表理解为用户没有偏好；不得由商品标题自动补造标签并称为官方风格。"
+  },
+  {
+    "field": "历史购买频率（purchase_frequency）",
+    "public_200_observation": "200/200 均为 3-4 prior purchases",
+    "extension_3021_observation": "3,021/3,021 均为 3-4 prior purchases",
+    "generation_or_check": "采用公开集观察到的固定文本",
+    "alignment": "与实际购买频率不吻合；仅公开集文本对齐，生成算法与 private 分布未知",
+    "evidence_level": "公开集常量",
+    "prohibited_claim": "不得声称每个扩展样本对应的真实用户确有 3–4 次历史购买。"
+  },
+  {
+    "field": "评分风格（rating_style）",
+    "public_200_observation": "5→usually positive；4→mixed；1–3→critical",
+    "extension_3021_observation": "采用同一映射",
+    "generation_or_check": "由平均评分字段确定性映射",
+    "alignment": "由唯一用户可以推得上述评分规律；其输入评分仍是代理值",
+    "evidence_level": "公开集规律 + 代理值派生",
+    "prohibited_claim": "不得称为真实用户的评论语气或稳定行为特征。"
+  },
+  {
+    "field": "用户摘要（summary）",
+    "public_200_observation": "模板包含真实偏好标签和评分风格",
+    "extension_3021_observation": "保留评分风格位置；标签位置固定写为 unavailable",
+    "generation_or_check": "显式标记不可得信息，绝不猜测标签",
+    "alignment": "部分对齐：结构与风格对齐，偏好文本未复原",
+    "evidence_level": "模板规律 + 不可得标记",
+    "prohibited_claim": "不得将该摘要用于推断真实用户偏好。"
+  }
+]
