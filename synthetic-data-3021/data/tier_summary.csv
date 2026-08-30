@@ -1,0 +1,5 @@
+quality_tier,quality_tier_label,selection_frequency_band,product_count,predicted_pool_member_count,mean_selection_frequency,median_test_event_count,median_rating_number,median_max_history_length,recommended_use
+high_confidence,高置信核心层,>= 0.80,1065,1065,0.986901,10.0,1080.0,20.0,主本地训练与回归集
+probable,较可能边界层,0.50–0.79,144,141,0.650833,3.0,278.0,15.0,敏感性验证；不是 private 标签
+uncertain,不确定备选层,0.20–0.49,168,0,0.350774,3.0,238.5,10.0,对照与难例集合
+low_likelihood,低可能长尾层,< 0.20,1644,0,0.008954,1.0,133.0,6.0,长尾压力测试；绝不当作 private 负例

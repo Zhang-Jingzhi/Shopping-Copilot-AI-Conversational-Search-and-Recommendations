@@ -1,0 +1,84 @@
+{
+  "scope": "仅含数据的本地扩展包；刻意不包含检索实验与坏例分析。",
+  "upstream_lineage": [
+    "Amazon Reviews 2023 Clothing_Shoes_and_Jewelry source data",
+    "Amazon 5-core LLO test split available locally",
+    "organizer frozen 50,000-product catalog and public 200 sessions",
+    "local candidate universe: catalog products that appear as LLO test targets",
+    "exclude 200 public target products, yielding 3,021 local extension targets",
+    "generate one deterministic public-schema-compatible session per remaining target",
+    "attach a separate positive-unlabeled selection-likelihood tier by parent_asin"
+  ],
+  "construction_steps": [
+    "Scan 2,524,981 test rows for ratings associated with catalog target parent_asin values.",
+    "Remove the 200 parent_asin values exposed by the public set; retain 3,021 unique targets.",
+    "Use seed 20260828 to assign public-proportional scenario types and observed difficulty mapping.",
+    "缩放公开 average_prior_rating 的边际分布，并为每个目标分配该目标在 LLO test 中出现过的单次互动评分代理；这不是用户历史平均分的复原。",
+    "设置公开可观察常量 category_bucket 与 purchase_frequency；由代理评分导出 rating_style。",
+    "真实用户、历史评分序列和标签算法不可得；preference_tags 显式留空，summary 标记 unavailable，而不是伪造用户画像。",
+    "Run the unmodified evaluator materializer on every generated session.",
+    "Attach product-level consensus tiers without changing the official session schema."
+  ],
+  "quality_tier_method": {
+    "method": "在公开覆盖较强的合理商品筛选规则之间计算跨模型入选频率共识。最终共识使用商品评论量、test 交互量、历史长度、历史长度≥13 覆盖量和 metadata 完整度。",
+    "rating_boundary": "商品 average_rating 不参与最终四层共识；用户 average_prior_rating 从未进入分层；test 单次 rating 也未进入最终共识。",
+    "not_a_label": "层级不证明 private-800 成员身份，low_likelihood 也不是负例标签。",
+    "tiers": [
+      {
+        "quality_tier": "high_confidence",
+        "quality_tier_label": "高置信核心层",
+        "selection_frequency_band": ">= 0.80",
+        "product_count": 1065,
+        "predicted_pool_member_count": 1065,
+        "mean_selection_frequency": 0.986901,
+        "median_test_event_count": 10.0,
+        "median_rating_number": 1080.0,
+        "median_max_history_length": 20.0,
+        "recommended_use": "主本地训练与回归集"
+      },
+      {
+        "quality_tier": "probable",
+        "quality_tier_label": "较可能边界层",
+        "selection_frequency_band": "0.50–0.79",
+        "product_count": 144,
+        "predicted_pool_member_count": 141,
+        "mean_selection_frequency": 0.650833,
+        "median_test_event_count": 3.0,
+        "median_rating_number": 278.0,
+        "median_max_history_length": 15.0,
+        "recommended_use": "敏感性验证；不是 private 标签"
+      },
+      {
+        "quality_tier": "uncertain",
+        "quality_tier_label": "不确定备选层",
+        "selection_frequency_band": "0.20–0.49",
+        "product_count": 168,
+        "predicted_pool_member_count": 0,
+        "mean_selection_frequency": 0.350774,
+        "median_test_event_count": 3.0,
+        "median_rating_number": 238.5,
+        "median_max_history_length": 10.0,
+        "recommended_use": "对照与难例集合"
+      },
+      {
+        "quality_tier": "low_likelihood",
+        "quality_tier_label": "低可能长尾层",
+        "selection_frequency_band": "< 0.20",
+        "product_count": 1644,
+        "predicted_pool_member_count": 0,
+        "mean_selection_frequency": 0.008954,
+        "median_test_event_count": 1.0,
+        "median_rating_number": 133.0,
+        "median_max_history_length": 6.0,
+        "recommended_use": "长尾压力测试；绝不当作 private 负例"
+      }
+    ]
+  },
+  "external_input_checksums": {
+    "catalog": "DA979B05A68AF864CB0DCF9EE6A81C010C7E66A57978AD286C7A2E005FC69A67",
+    "public_set": "571359A8A69014C43FC30D39C996C4A28E875DCCC249DFFC707358757BEB16C0",
+    "test_split": "BDA2E59453ADC8E9CFA1523D053A826C481FA6AF2A39B8BF5BA9FBB51829869E",
+    "product_tiers": "B5F4598E2497DDFE506D34426E6393BE9EBD494193888855B9D9F3B8390BAAA0"
+  },
+  "extension_seed": 20260828
+}
