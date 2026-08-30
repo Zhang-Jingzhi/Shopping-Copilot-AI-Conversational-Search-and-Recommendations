@@ -14,6 +14,12 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _TECHJAM_ROOT = _REPOSITORY_ROOT / "retrieval-and-reranking"
 if str(_TECHJAM_ROOT) not in sys.path:
     sys.path.insert(0, str(_TECHJAM_ROOT))
+_STATE_MEMORY_ROOT = _REPOSITORY_ROOT / "conversation-state-memory" / "src"
+if str(_STATE_MEMORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_STATE_MEMORY_ROOT))
+_INTENT_ROOT = _REPOSITORY_ROOT / "intent-recognition"
+if str(_INTENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_INTENT_ROOT))
 
 from ranking_pipeline.contextual_ranking import (
     CandidatePoolMetrics,
@@ -26,12 +32,30 @@ from ranking_pipeline.contextual_ranking import (
     choose_clarification_attribute,
     choose_rerank_strategy,
 )
-from ranking_pipeline.prompt import LLMRankResult, build_rerank_prompt, parse_rerank_output
+from ranking_pipeline.distribution_alignment import (
+    DistributionSummary,
+    build_aligned_training_examples,
+    summarize_examples,
+    summarize_synthetic_rankings,
+)
+from ranking_pipeline.prompt import (
+    LLMRankResult,
+    build_rerank_prompt,
+    estimate_prompt_tokens,
+    parse_rerank_output,
+)
 from ranking_pipeline.qwen_reranker import Qwen3Reranker
+from ranking_pipeline.memory_context import (
+    intent_to_context,
+    intent_to_requirements,
+    merge_profile_with_snapshot,
+    snapshot_to_requirements,
+)
 
 __all__ = [
     "ConstraintConflict",
     "CandidatePoolMetrics",
+    "DistributionSummary",
     "HybridContextualReranker",
     "LLMRankResult",
     "LocalQwenRanker",
@@ -42,5 +66,13 @@ __all__ = [
     "choose_clarification_attribute",
     "choose_rerank_strategy",
     "build_rerank_prompt",
+    "build_aligned_training_examples",
+    "estimate_prompt_tokens",
+    "intent_to_context",
+    "intent_to_requirements",
+    "merge_profile_with_snapshot",
     "parse_rerank_output",
+    "snapshot_to_requirements",
+    "summarize_examples",
+    "summarize_synthetic_rankings",
 ]

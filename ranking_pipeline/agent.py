@@ -21,6 +21,9 @@ from ranking_pipeline.contextual_ranking import (
     HybridContextualReranker,
     RecommendationClarificationPolicy,
 )
+from ranking_pipeline.memory_context import (
+    intent_to_context,
+)
 from ranking_pipeline.qwen_reranker import Qwen3Reranker
 
 
@@ -75,6 +78,8 @@ class RankingAgent(BaseAgent):
         reranker_mode: str = "locked",
         reranker_model: str | Path | None = None,
         policy_enabled: bool = False,
+        use_state_memory: bool = False,
+        use_intent_router: bool = False,
     ) -> None:
         from techjam_agent.retrieval import (
             ExactDenseTop50CandidateGenerator,
@@ -102,11 +107,32 @@ class RankingAgent(BaseAgent):
         super().__init__(catalog_path, candidate_generator=candidate_generator, reranker=reranker)
         self._asked_attributes: dict[str, list[str]] = {}
         self._policy_enabled = policy_enabled
+        self._memory_snapshots: dict[str, Any] = {}
+        self._intent_contexts: dict[str, dict[str, Any]] = {}
+        self._intent_results: dict[str, Any] = {}
+        self._state_memory = None
+        if use_state_memory:
+            from state_memory import StateMemoryManager
+
+            self._state_memory = StateMemoryManager()
+        self._intent_router = None
+        if use_intent_router:
+            from intent_router import IntentRouter, load_catalog_brands, load_catalog_categories
+
+            self._intent_router = IntentRouter(
+                known_brands=load_catalog_brands(Path(catalog_path)),
+                known_categories=load_catalog_categories(Path(catalog_path)),
+            )
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         collector = ContextualRequirementsCollector(user_profile=user_profile)
         self._sessions[session_id] = collector
         self._asked_attributes[session_id] = []
+        self._memory_snapshots.pop(session_id, None)
+        self._intent_contexts.pop(session_id, None)
+        self._intent_results.pop(session_id, None)
+        if self._state_memory is not None:
+            self._state_memory.sessions.pop(session_id, None)
         self._configure_reranker(session_id, collector)
 
     def _configure_reranker(self, session_id: str, collector: ContextualRequirementsCollector) -> None:
@@ -119,7 +145,24 @@ class RankingAgent(BaseAgent):
             requirements=collector.requirements(),
             asked_attributes=tuple(self._asked_attributes.get(session_id, ())),
             short_term=collector.short_term_summary(),
+            context_snapshot=self._memory_snapshots.get(session_id),
+            intent_context=self._intent_contexts.get(session_id),
         )
+
+    def _update_external_context(self, session_id: str, user_message: str) -> None:
+        """Feed the sibling state/intent modules without changing retrieval code."""
+
+        if self._state_memory is not None:
+            snapshot = self._state_memory.update(
+                session_id=session_id,
+                user_id=session_id,
+                utterance=user_message,
+            )
+            self._memory_snapshots[session_id] = snapshot
+        if self._intent_router is not None:
+            intent_result = self._intent_router.understand(user_message)
+            self._intent_results[session_id] = intent_result
+            self._intent_contexts[session_id] = intent_to_context(intent_result)
 
     def _record_asked(self, session_id: str, attribute: str | None) -> None:
         if attribute is None:
@@ -139,6 +182,7 @@ class RankingAgent(BaseAgent):
         if collector is None:
             raise RuntimeError("reset must be called before respond")
         collector.observe(user_message, turn)
+        self._update_external_context(session_id, user_message)
         self._configure_reranker(session_id, collector)
         if turn <= 2:
             self._record_asked(session_id, "other")

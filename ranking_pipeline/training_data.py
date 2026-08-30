@@ -1,20 +1,23 @@
-"""Deterministic public-set training data for the Qwen3 reranker.
+"""Deterministic public and synthetic training data for the Qwen3 reranker.
 
 The evaluator materializes hidden requirements from product metadata. For local
 reranker training we reproduce that public logic from the participant kit, then
 join the already-materialized Top50 candidate list with the frozen catalog.
 The organizer's private 800 sessions are never used and no private label is
-reconstructed.
+reconstructed. The synthetic 3,021 sessions are used only as a public-schema
+compatible local proxy for distribution alignment and are never reported as an
+official generalization result.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping, Sequence
 
 from techjam_agent.contracts import Requirements
 from ranking_pipeline.qwen_reranker import format_pair, product_text, query_text
@@ -117,6 +120,9 @@ class RerankTrainingExample:
     document: str
     label: float
     parent_asin: str
+    weight: float = 1.0
+    source: str = "public"
+    tier: str = "public"
 
 
 def load_jsonl(path: str | Path) -> list[dict]:
@@ -140,55 +146,42 @@ def load_top50(path: str | Path) -> dict[str, list[str]]:
     return top50
 
 
-def build_public_training_examples(
-    public_set_path: str | Path,
-    public_top50_path: str | Path,
-    catalog_path: str | Path,
-    *,
-    negatives_per_positive: int = 4,
-    seed: int = 0,
-    limit: int | None = None,
-) -> list[RerankTrainingExample]:
-    samples = load_jsonl(public_set_path)
-    top50 = load_top50(public_top50_path)
-    catalog = load_catalog(catalog_path)
-    rng = random.Random(seed)
-    examples: list[RerankTrainingExample] = []
-    for sample in samples:
-        sample_id = str(sample["sample_id"])
-        target = str(sample["ground_truth"]["parent_asin"])
-        candidates = top50.get(sample_id, [])
-        if target not in candidates:
-            continue
-        target_product = catalog.get(target)
-        if target_product is None:
-            continue
-        query = query_text(requirements_from_product(target_product))
-        examples.append(
-            RerankTrainingExample(
-                query=query,
-                document=product_text(_candidate_product(target, target_product)),
-                label=1.0,
-                parent_asin=target,
-            )
-        )
-        negatives = [item for item in candidates if item != target]
-        rng.shuffle(negatives)
-        for negative_id in negatives[:negatives_per_positive]:
-            negative_product = catalog.get(negative_id)
-            if negative_product is None:
-                continue
-            examples.append(
-                RerankTrainingExample(
-                    query=query,
-                    document=product_text(_candidate_product(negative_id, negative_product)),
-                    label=0.0,
-                    parent_asin=negative_id,
+def _sample_negative_candidates(
+    target_asin: str,
+    target_product: dict,
+    catalog: Mapping[str, dict],
+    product_pool: Mapping[str, Mapping[str, str]] | None,
+    rng: random.Random,
+    count: int,
+) -> list[str]:
+    """Return deterministic negatives from the pool when no Top50 file exists."""
+
+    if product_pool:
+        target_categories = {
+            str(value).strip().lower()
+            for value in (target_product.get("categories") or [])
+            if str(value).strip()
+        }
+        candidates = [
+            parent_asin
+            for parent_asin, metadata in product_pool.items()
+            if parent_asin != target_asin
+            and any(
+                category in target_categories
+                for category in (
+                    metadata.get("leaf_category", "").lower(),
+                    metadata.get("family", "").lower(),
                 )
             )
-        if limit is not None and len(examples) >= limit:
-            break
-    return examples
+        ]
+        if not candidates:
+            candidates = [
+                parent_asin for parent_asin in product_pool if parent_asin != target_asin
+            ]
+    else:
+        candidates = [parent_asin for parent_asin in catalog if parent_asin != target_asin]
+    rng.shuffle(candidates)
+    return candidates[:count]
 
 
 def _candidate_product(parent_asin: str, product: dict):
@@ -210,3 +203,297 @@ def _candidate_product(parent_asin: str, product: dict):
 
 def examples_to_pairs(examples: Iterable[RerankTrainingExample]) -> list[tuple[str, str]]:
     return [(example.query, example.document) for example in examples]
+
+
+def load_product_weak_supervision(path: str | Path) -> dict[str, dict[str, str]]:
+    """Load product-level weak pool supervision from a CSV file.
+
+    Expected columns include ``parent_asin``, ``family``, ``leaf_category``,
+    ``quality_tier``, and ``selection_frequency``. The returned dictionary is
+    keyed by parent_asin and keeps only string fields, so callers can use it as
+    a deterministic negative-sampling pool without depending on the old
+    precomputed Top50 directories.
+    """
+
+    records: dict[str, dict[str, str]] = {}
+    with Path(path).open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            parent_asin = str(row.get("parent_asin") or "").strip()
+            if not parent_asin:
+                continue
+            records[parent_asin] = {
+                "family": str(row.get("family") or "").strip(),
+                "leaf_category": str(row.get("leaf_category") or "").strip(),
+                "quality_tier": str(row.get("quality_tier") or "").strip(),
+                "selection_frequency": str(row.get("selection_frequency") or "").strip(),
+            }
+    return records
+
+
+def load_tier_weights(path: str | Path) -> dict[str, str]:
+    """Return ``sample_id -> quality_tier`` from the synthetic tiers JSONL."""
+
+    tiers: dict[str, str] = {}
+    for row in load_jsonl(path):
+        sample_id = str(row.get("sample_id") or "").strip()
+        tier = str(row.get("quality_tier") or "").strip()
+        if sample_id and tier:
+            tiers[sample_id] = tier
+    return tiers
+
+
+def default_tier_weight(tier: str) -> float:
+    """Conservative weights for positive-unlabeled synthetic tiers.
+
+    ``high_confidence`` and ``probable`` are the recommended training pool.
+    Lower tiers are useful for calibration and hard negatives but are not
+    official private-800 labels.
+    """
+
+    return {
+        "high_confidence": 1.0,
+        "probable": 0.6,
+        "uncertain": 0.25,
+        "low_likelihood": 0.1,
+    }.get(tier, 0.25)
+
+
+def _product_negative_weight(metadata: Mapping[str, str]) -> float:
+    """Weight a synthetic negative by product tier and selection frequency.
+
+    Selection frequency approximates how often a product appears in retrieval
+    candidate pools. Combining it with quality tier keeps the sampled negatives
+    distributionally close to the real retrieval distribution while still
+    suppressing noisy/low-confidence catalog rows.
+    """
+
+    tier_weight = default_tier_weight(metadata.get("quality_tier") or "unknown")
+    try:
+        frequency = float(metadata.get("selection_frequency") or 1.0)
+    except ValueError:
+        frequency = 1.0
+    return max(0.01, tier_weight * max(0.0, frequency))
+
+
+def _weighted_sample_ids(
+    candidate_ids: Sequence[str],
+    weights: Sequence[float],
+    count: int,
+    rng: random.Random,
+) -> list[str]:
+    """Sample unique IDs without replacement using deterministic weights."""
+
+    if not candidate_ids or count <= 0:
+        return []
+    remaining = list(candidate_ids)
+    remaining_weights = list(weights)
+    selected: list[str] = []
+    while remaining and len(selected) < count:
+        if any(weight > 0 for weight in remaining_weights):
+            choice = rng.choices(range(len(remaining)), weights=remaining_weights, k=1)[0]
+        else:
+            choice = rng.randrange(len(remaining))
+        selected.append(remaining.pop(choice))
+        remaining_weights.pop(choice)
+    return selected
+
+
+def build_public_training_examples(
+    public_set_path: str | Path,
+    public_top50_path: str | Path | None,
+    catalog_path: str | Path,
+    *,
+    negatives_per_positive: int = 4,
+    negative_pool_csv_path: str | Path | None = None,
+    seed: int = 0,
+    limit: int | None = None,
+    positive_weight: float = 1.0,
+    negative_weight: float = 1.0,
+) -> list[RerankTrainingExample]:
+    """Build public-200 examples, optionally using a frozen Top50 candidate file.
+
+    When ``public_top50_path`` is missing, negatives are sampled from the weak
+    supervision CSV or the catalog itself so the training loop no longer depends
+    on the old precomputed Top50 directory.
+    """
+
+    samples = load_jsonl(public_set_path)
+    top50 = (
+        load_top50(public_top50_path)
+        if public_top50_path is not None and Path(public_top50_path).is_file()
+        else {}
+    )
+    catalog = load_catalog(catalog_path)
+    product_pool = (
+        load_product_weak_supervision(negative_pool_csv_path)
+        if negative_pool_csv_path is not None
+        else None
+    )
+    rng = random.Random(seed)
+    examples: list[RerankTrainingExample] = []
+    for sample in samples:
+        sample_id = str(sample["sample_id"])
+        target = str(sample["ground_truth"]["parent_asin"])
+        target_product = catalog.get(target)
+        if target_product is None:
+            continue
+        candidates = top50.get(sample_id, [])
+        if target in candidates:
+            negatives = [item for item in candidates if item != target]
+        else:
+            negatives = _sample_negative_candidates(
+                target,
+                target_product,
+                catalog,
+                product_pool,
+                rng,
+                negatives_per_positive,
+            )
+        query = query_text(requirements_from_product(target_product))
+        examples.append(
+            RerankTrainingExample(
+                query=query,
+                document=product_text(_candidate_product(target, target_product)),
+                label=1.0,
+                parent_asin=target,
+                weight=positive_weight,
+                source="public",
+                tier="public",
+            )
+        )
+        rng.shuffle(negatives)
+        for negative_id in negatives[:negatives_per_positive]:
+            negative_product = catalog.get(negative_id)
+            if negative_product is None:
+                continue
+            examples.append(
+                RerankTrainingExample(
+                    query=query,
+                    document=product_text(_candidate_product(negative_id, negative_product)),
+                    label=0.0,
+                    parent_asin=negative_id,
+                    weight=negative_weight,
+                    source="public",
+                    tier="public",
+                )
+            )
+        if limit is not None and len(examples) >= limit:
+            break
+    return examples
+
+
+def build_synthetic_training_examples(
+    synthetic_set_path: str | Path,
+    catalog_path: str | Path,
+    *,
+    product_csv_path: str | Path | None = None,
+    tiers_path: str | Path | None = None,
+    negatives_per_positive: int = 4,
+    seed: int = 0,
+    limit: int | None = None,
+    tier_filter: Sequence[str] = ("high_confidence", "probable"),
+    positive_weight: float | None = None,
+    negative_weight: float = 0.5,
+    exclude_target_ids: Sequence[str] = (),
+) -> list[RerankTrainingExample]:
+    """Build synthetic proxy examples without depending on old Top50 files.
+
+    The target product is positive. Negatives are sampled from the weak
+    supervision CSV's same leaf-category pool, which approximates the
+    distribution a lightweight retrieval stage would produce while remaining
+    reproducible and offline.
+    """
+
+    samples = load_jsonl(synthetic_set_path)
+    catalog = load_catalog(catalog_path)
+    tiers = load_tier_weights(tiers_path) if tiers_path is not None else {}
+    product_pool = (
+        load_product_weak_supervision(product_csv_path)
+        if product_csv_path is not None
+        else {}
+    )
+    allowed_tiers = set(tier_filter)
+    excluded_targets = set(exclude_target_ids)
+    rng = random.Random(seed)
+    examples: list[RerankTrainingExample] = []
+
+    by_category: dict[str, list[str]] = {}
+    for parent_asin, metadata in product_pool.items():
+        category = metadata.get("leaf_category") or "unknown"
+        by_category.setdefault(category, []).append(parent_asin)
+
+    for sample in samples:
+        sample_id = str(sample["sample_id"])
+        tier = tiers.get(sample_id)
+        if allowed_tiers and (tier is None or tier not in allowed_tiers):
+            continue
+        target = str(sample["ground_truth"]["parent_asin"])
+        if target in excluded_targets:
+            continue
+        target_product = catalog.get(target)
+        if target_product is None:
+            continue
+        target_weight = (
+            default_tier_weight(tier)
+            if positive_weight is None and tier is not None
+            else (positive_weight if positive_weight is not None else 1.0)
+        )
+        query = query_text(requirements_from_product(target_product))
+        examples.append(
+            RerankTrainingExample(
+                query=query,
+                document=product_text(_candidate_product(target, target_product)),
+                label=1.0,
+                parent_asin=target,
+                weight=target_weight,
+                source="synthetic",
+                tier=tier or "unknown",
+            )
+        )
+
+        target_metadata = product_pool.get(target, {})
+        category = target_metadata.get("leaf_category") or "unknown"
+        same_category = [item for item in by_category.get(category, []) if item != target]
+        same_category_weights = [
+            _product_negative_weight(product_pool.get(item, {}))
+            for item in same_category
+        ]
+        negatives = _weighted_sample_ids(
+            same_category,
+            same_category_weights,
+            negatives_per_positive,
+            rng,
+        )
+        if len(negatives) < negatives_per_positive and product_pool:
+            other = [item for item in product_pool if item != target]
+            other = [item for item in other if item not in set(negatives)]
+            other_weights = [
+                _product_negative_weight(product_pool.get(item, {}))
+                for item in other
+            ]
+            negatives.extend(
+                _weighted_sample_ids(
+                    other,
+                    other_weights,
+                    negatives_per_positive - len(negatives),
+                    rng,
+                )
+            )
+        for negative_id in negatives[:negatives_per_positive]:
+            negative_product = catalog.get(negative_id)
+            if negative_product is None:
+                continue
+            examples.append(
+                RerankTrainingExample(
+                    query=query,
+                    document=product_text(_candidate_product(negative_id, negative_product)),
+                    label=0.0,
+                    parent_asin=negative_id,
+                    weight=negative_weight,
+                    source="synthetic",
+                    tier=tier or "unknown",
+                )
+            )
+        if limit is not None and len(examples) >= limit:
+            break
+    return examples

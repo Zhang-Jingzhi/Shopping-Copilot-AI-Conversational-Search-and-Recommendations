@@ -14,7 +14,13 @@ from ranking_pipeline.contextual_ranking import (
     choose_rerank_strategy,
     filter_hard_conflicts,
 )
-from ranking_pipeline.prompt import LLMRankResult, build_rerank_prompt, parse_rerank_output
+from ranking_pipeline.prompt import (
+    LLMRankResult,
+    build_rerank_prompt,
+    estimate_prompt_tokens,
+    parse_rerank_output,
+)
+from ranking_pipeline.qwen_reranker import Qwen3Reranker
 
 
 def make_candidate(index: int, *, title: str = "", features: list[str] | None = None) -> Candidate:
@@ -57,6 +63,12 @@ class FakeLLMRanker:
 
 
 class ContextualRankingTests(unittest.TestCase):
+    def test_estimate_prompt_tokens_handles_ascii_and_cjk(self) -> None:
+        self.assertEqual(estimate_prompt_tokens(""), 0)
+        self.assertEqual(estimate_prompt_tokens("abcd"), 1)
+        self.assertEqual(estimate_prompt_tokens("你好世界"), 4)
+        self.assertGreaterEqual(estimate_prompt_tokens("hello world"), 1)
+
     def test_hard_filter_removes_only_a_fully_conflicted_candidate(self) -> None:
         requirements = Requirements("Women's Shirts", ("cotton", "blue"), ())
         candidates = [make_candidate(index) for index in range(49)]
@@ -179,6 +191,24 @@ class ContextualRankingTests(unittest.TestCase):
         )
         self.assertEqual(conflict_decision.action, "clarify")
 
+    def test_hybrid_reranker_caps_prompt_candidates_dynamically(self) -> None:
+        reranker = HybridContextualReranker(
+            llm_ranker=FakeLLMRanker(
+                result=LLMRankResult(("P00", "P01"), (), 0.8, False)
+            ),
+            top_n=20,
+        )
+        reranker.rerank(
+            make_candidate_set(
+                Requirements("Women's Shirts", ("cotton", "blue"), ()),
+                count=50,
+            ),
+            top_k=2,
+        )
+        self.assertEqual(reranker.last_prompt_candidate_count, 10)
+        self.assertGreater(reranker.last_prompt_chars, 0)
+        self.assertGreater(reranker.last_prompt_tokens, 0)
+
     def test_override_message_is_parsed(self) -> None:
         values = parse_override_message(
             "Actually, ignore my earlier preference. What I need is: cotton; blue."
@@ -205,6 +235,8 @@ class ContextualRankingTests(unittest.TestCase):
         self.assertEqual(choose_rerank_strategy(has_model=True, turn=10, selected_count=20, top_k=10, hard_hit_rate=0.5), "locked")
         self.assertEqual(choose_rerank_strategy(has_model=True, turn=3, selected_count=10, top_k=10, hard_hit_rate=1.0), "hybrid")
         self.assertEqual(choose_rerank_strategy(has_model=True, turn=3, selected_count=20, top_k=10, hard_hit_rate=0.5), "hybrid")
+        self.assertEqual(choose_rerank_strategy(has_model=True, turn=3, selected_count=40, top_k=10, hard_hit_rate=0.6), "locked")
+        self.assertEqual(choose_rerank_strategy(has_model=True, turn=3, selected_count=40, top_k=10, hard_hit_rate=0.4), "locked")
 
         self.assertEqual(
             choose_clarification_attribute(
@@ -232,6 +264,51 @@ class ContextualRankingTests(unittest.TestCase):
         )
         self.assertEqual(decision.action, "clarify")
         self.assertEqual(decision.ask_attribute, "color")
+
+    def test_hard_constraint_penalty_demotes_partial_conflict(self) -> None:
+        class FakeQwenWithConflict(Qwen3Reranker):
+            def score_candidates(self, *args, **kwargs):
+                del args, kwargs
+                return {f"P{index:02d}": 0.1 for index in range(50)} | {
+                    "P00": 0.8,
+                    "P01": 0.7,
+                    "P02": 0.95,
+                }
+
+        candidates = [
+            make_candidate(index) for index in range(50)
+        ]
+        candidates[2] = Candidate(
+            parent_asin="P02",
+            candidate_rank=3,
+            source_ranks={"route": 3},
+            product={
+                "title": "Cotton red shirt",
+                "categories": ["Clothing", "Women's Shirts"],
+                "features": ["cotton"],
+                "details": {},
+                "description": [],
+                "store": "Example",
+            },
+        )
+        candidate_set = CandidateSet(
+            candidate_set_id="session:3",
+            session_id="session",
+            turn=3,
+            requirements=Requirements("Women's Shirts", ("cotton", "blue"), ()),
+            candidates=tuple(candidates),
+        )
+
+        reranker = HybridContextualReranker(
+            llm_ranker=FakeQwenWithConflict(),
+            top_n=20,
+            hard_constraint_penalty=0.25,
+        )
+        result = reranker.rerank(candidate_set, top_k=2)
+
+        ranked_ids = [candidate.parent_asin for candidate in result.ranked_candidates]
+        self.assertNotIn("P02", ranked_ids)
+        self.assertEqual(ranked_ids[0], "P00")
 
 
 if __name__ == "__main__":

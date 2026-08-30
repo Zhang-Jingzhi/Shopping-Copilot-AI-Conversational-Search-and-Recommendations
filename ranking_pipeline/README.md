@@ -15,13 +15,17 @@ This directory implements component 4 and D:
 ```text
 ranking_pipeline/
   context.py            profile compaction and intent-override parsing
+  memory_context.py     intent-router/state-memory adapters
   prompt.py             compact listwise prompt and strict JSON parser
   qwen_reranker.py      Qwen3-Reranker-0.6B pointwise adapter
   contextual_ranking.py hard filter + pre-rank + final reranker + policy
-  training_data.py      public 200 pair construction
+  training_data.py      public/synthetic pair construction
+  distribution_alignment.py aligned public+3021 training data
   train_reranker.py     scoring-head training script
   evaluate_agent.py     official evaluator wrapper
   analyze_cutoff.py     offline Top20/Top50 recall check
+  diagnose_synthetic.py synthetic 3,021 diagnostic summarizer
+  summarize_results.py  saved-result comparison table
   checkpoints/          trained scoring head
   results/              local evaluator results
 ```
@@ -88,17 +92,53 @@ The official scope permits local scoring logic and prompt tuning, while
 full-parameter training of base foundation models is out of scope. This script
 freezes the transformer trunk and trains only the `score` classifier parameter.
 
+The default `aligned` strategy combines the public 200 gold set with the
+synthetic 3,021 proxy set. The synthetic proxy is public-schema compatible but
+not the organizer private-800 set: use it only for distribution alignment and
+calibration, never as the final reported score. Synthetic positives use target
+products as positives, while negatives are sampled from the same leaf category
+with weights derived from `quality_tier` and `selection_frequency`.
+
+For the joint strategy, public positives default to `5.0` loss weight (the
+recommended 5-10x band), and each epoch is evaluated on the public set. The
+best public-accuracy checkpoint is restored before saving. A public-only run
+defaults to one epoch; an aligned run defaults to two epochs.
+
 ```powershell
 python -m ranking_pipeline.train_reranker `
+  --data-strategy aligned `
   --epochs 2 `
   --batch-size 4 `
-  --negatives-per-positive 2 `
+  --negatives-per-positive 4 `
+  --synthetic-negatives-per-positive 4 `
   --max-length 512 `
   --output ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping
 ```
 
+Set `--data-strategy public` for the previous public-200-only run, or
+`--data-strategy synthetic` for a synthetic-only dry run/ablation. The old
+`techjam-precomputed-rankings-200-and-3021` directory is no longer required:
+pass `--public-top50` only when a precomputed public Top50 file is available;
+otherwise the builder samples negatives from the synthetic product CSV/catalog.
+
 First run `--dry-run` to inspect the generated pairs without downloading model
 weights.
+
+After generating synthetic ranked predictions, emit diagnostics only:
+
+```powershell
+python -m ranking_pipeline.diagnose_synthetic `
+  --rankings ranking_pipeline\results\synthetic-3021-ranked.jsonl `
+  --top-k 10
+```
+
+The diagnostic report contains per-tier recall, score distribution, and
+over-general rate. Do not use it as the official evaluation metric.
+
+The precomputed Top50 diagnostic output is saved to
+`ranking_pipeline/results/synthetic-3021-diagnostics.json` and records
+`per-tier recall` from `0.950` to `0.986`, a `43.36%` over-general rate, and
+the fallback score distribution across 30,210 scored candidates.
 
 ## Run The Full Pipeline
 
@@ -114,24 +154,58 @@ python -m ranking_pipeline.evaluate_agent --mode hybrid --retrieval-mode lite
 
 # full pipeline with the trained Qwen3-Reranker-0.6B scoring head
 python -m ranking_pipeline.evaluate_agent --mode local --retrieval-mode lite
+
+# optional: consume conversation-state-memory + intent-recognition contracts
+python -m ranking_pipeline.evaluate_agent --mode local --retrieval-mode lite `
+  --use-state-memory --use-intent-router
 ```
 
-The trained-head local fusion run recorded:
+## Context Source
 
-```text
-HitRate@10 0.975
-MRR        0.878429
-MTTC       3.320
-Technical  0.904629
+The official ``reset(session_id, user_profile)`` profile is the primary
+long-term user signal. ``conversation-state-memory`` supplies the short-term
+``ContextSnapshot``, and ``intent-recognition`` supplies the current-turn
+``IntentResult``. ``ranking_pipeline.memory_context`` merges official profile
+tags with snapshot ``profile_hints``; current-turn hard constraints still
+override any profile hint.
+
+The official requirements collector remains the retrieval/ranking requirement
+source because it is the contract the evaluator already validates against. The
+optional ``IntentResult`` and ``ContextSnapshot`` are supplemental inputs:
+they provide current-turn route/ambiguity signals, accumulated slots,
+exclusions, session summary, and profile hints. They are passed into
+``set_session_context`` rather than replacing the collector output. The
+long-term official profile is still the safest personalization signal; do not
+let the state-memory in-memory ``UserProfile`` replace it.
+
+The final LLM/listwise prompt is capped to ``min(top_n, max(top_k * 2, 10))``
+candidates after the locked pre-rank. Prompt chars and an approximate token
+count are stored on the reranker as ``last_prompt_chars`` and
+``last_prompt_tokens`` for latency/telemetry verification.
+
+Formal `exact` dense public-200 results:
+
+| mode | Hit@10 | MRR | MTTC | Technical |
+|---|---:|---:|---:|---:|
+| `local-exact.json` | 0.975 | 0.786365 | 3.32 | 0.877009 |
+| `locked-exact.json` | 0.970 | 0.870548 | 3.325 | 0.899664 |
+| `hybrid-exact.json` | 0.835 | 0.480437 | 4.39 | 0.693831 |
+| `local-exact-policy.json` | 0.850 | 0.503417 | 9.955 | 0.596925 |
+
+The locked exact path remains the strongest overall by MRR and MTTC; local
+pointwise fusion preserves Hit@10 but currently lowers MRR. Enabling the
+clarification policy is not recommended for this public evaluator because it
+increases MTTC sharply. A pointwise-weight sweep (`0.1`, `0.35`, `0.6`) did not
+recover the locked MRR, so the locked exact path is the current recommended
+submission configuration.
+
+When CUDA reports `Unrecognized CachingAllocator option`, run exact/local
+experiments with:
+
+```powershell
+$env:PYTORCH_CUDA_ALLOC_CONF='expandable_segments:False'
+$env:TECHJAM_RERANKER_DEVICE='cuda'
 ```
-
-The locked baseline on the same `lite` retrieval path recorded
-`HitRate@10 0.970`, `MRR 0.870548`, and `Technical 0.899664`; the hybrid
-no-local-model run recorded `HitRate@10 0.735` and `MRR 0.302028`. The pointwise
-fusion therefore preserves the locked baseline's stable ordering while using
-the local model to recover some missed high-rank targets. These are full
-public-evaluator smoke results, not the exact dense retrieval submission score;
-`exact` still needs the BGE local assets.
 
 The policy layer selects the next `ask_attribute` instead of always returning
 `other`. It accounts for prior asked attributes, missing requirement attributes,
@@ -147,7 +221,7 @@ From the repository root:
 python -m unittest discover -s ranking_pipeline/tests -t . -v
 ```
 
-The ranking-pipeline suite currently contains 15 tests and does not download
+The ranking-pipeline suite currently contains 29 tests and does not download
 model weights. The original retrieval-and-reranking suite can still be run
 unchanged from that directory with:
 

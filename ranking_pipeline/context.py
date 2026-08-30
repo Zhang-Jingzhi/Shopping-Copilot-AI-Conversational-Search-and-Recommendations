@@ -92,6 +92,9 @@ def compact_profile(profile: Mapping[str, Any] | None) -> str:
         parts.append(f"purchase_frequency: {features.purchase_frequency}")
     if features.summary:
         parts.append(f"summary: {features.summary}")
+    conversation_summary = str(profile.get("conversation_summary") or "") if profile else ""
+    if conversation_summary:
+        parts.append(f"session: {conversation_summary[:240]}")
     return "; ".join(parts)
 
 

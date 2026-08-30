@@ -11,7 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RETRIEVAL_ROOT = ROOT / "retrieval-and-reranking"
 DATA_ROOT = RETRIEVAL_ROOT / "data"
-PRECOMPUTED = DATA_ROOT / "techjam-precomputed-rankings-200-and-3021"
+DEFAULT_PUBLIC_TOP50 = DATA_ROOT / "public200_top50.jsonl"
+DEFAULT_PUBLIC_TOP10 = DATA_ROOT / "public200_top10.jsonl"
 
 
 def load_ranking(path: Path) -> dict[str, list[str]]:
@@ -79,12 +80,12 @@ def main() -> None:
     parser.add_argument(
         "--public-top50",
         type=Path,
-        default=PRECOMPUTED / "public200_top50.jsonl",
+        default=DEFAULT_PUBLIC_TOP50,
     )
     parser.add_argument(
         "--public-top10",
         type=Path,
-        default=PRECOMPUTED / "public200_top10.jsonl",
+        default=DEFAULT_PUBLIC_TOP10,
     )
     parser.add_argument(
         "--dataset",

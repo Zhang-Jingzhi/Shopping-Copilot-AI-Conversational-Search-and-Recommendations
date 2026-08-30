@@ -35,6 +35,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, default=RETRIEVAL_ROOT / "data" / "public_set.jsonl")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--policy", action="store_true")
+    parser.add_argument("--use-state-memory", action="store_true")
+    parser.add_argument("--use-intent-router", action="store_true")
     return parser.parse_args()
 
 
@@ -51,6 +53,8 @@ def main() -> None:
         reranker_mode=args.mode,
         reranker_model=args.reranker_model,
         policy_enabled=args.policy,
+        use_state_memory=args.use_state_memory,
+        use_intent_router=args.use_intent_router,
     )
     result = local_evaluator.evaluate(
         agent,

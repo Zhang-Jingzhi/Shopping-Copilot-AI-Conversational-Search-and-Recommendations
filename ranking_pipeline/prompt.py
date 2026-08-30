@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
@@ -13,6 +14,23 @@ from ranking_pipeline.context import compact_profile, compact_requirements
 
 PRODUCT_FIELDS = ("title", "categories", "features", "details", "store", "description")
 MAX_CANDIDATE_CHARS = 180
+
+
+def estimate_prompt_tokens(text: str) -> int:
+    """Return a dependency-free approximation of the prompt token count.
+
+    The reranker does not always have access to the live tokenizer at prompt
+    build time, so this is intentionally a heuristic for latency and token
+    budget telemetry rather than an exact count. CJK characters are counted
+    close to one token each; the remaining characters are folded by the
+    common four-characters-per-token approximation.
+    """
+
+    if not text:
+        return 0
+    cjk_chars = len(re.findall(r"[\u3000-\u9fff\uf900-\ufaff\uff00-\uffef]", text))
+    other_chars = max(0, len(text) - cjk_chars)
+    return max(1, int(math.ceil(cjk_chars + (other_chars / 4.0))))
 
 
 def _text(value: object) -> str:

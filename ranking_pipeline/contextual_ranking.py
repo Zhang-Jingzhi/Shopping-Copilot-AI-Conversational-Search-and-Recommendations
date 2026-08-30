@@ -14,9 +14,11 @@ from techjam_agent.contracts import (
     Requirements,
 )
 from ranking_pipeline.context import ShortTermSummary, profile_features
+from ranking_pipeline.memory_context import merge_profile_with_snapshot
 from ranking_pipeline.prompt import (
     LLMRankResult,
     build_rerank_prompt,
+    estimate_prompt_tokens,
     parse_rerank_output,
 )
 from ranking_pipeline.qwen_reranker import Qwen3Reranker, product_text
@@ -180,9 +182,15 @@ def choose_rerank_strategy(
     top_k: int,
     hard_hit_rate: float,
 ) -> str:
+    """Select the cheapest reliable reranking path for the current context."""
+
     if not has_model:
         return "hybrid"
     if turn >= 10:
+        return "locked"
+    if hard_hit_rate < 0.5:
+        return "locked"
+    if selected_count > top_k * 3 and hard_hit_rate < 0.8:
         return "locked"
     return "hybrid"
 
@@ -330,21 +338,37 @@ class HybridContextualReranker:
         min_keep: int = 15,
         profile_weight: float = 0.05,
         pointwise_weight: float = 0.35,
+        hard_constraint_penalty: float = 0.20,
     ) -> None:
+        try:
+            pointwise_weight = float(os.environ["TECHJAM_POINTWISE_WEIGHT"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            hard_constraint_penalty = float(os.environ["TECHJAM_HARD_PENALTY"])
+        except (KeyError, TypeError, ValueError):
+            pass
         self.llm_ranker = llm_ranker
         self.top_n = top_n
         self.min_keep = min_keep
         self.profile_weight = profile_weight
         self.pointwise_weight = pointwise_weight
+        self.hard_constraint_penalty = hard_constraint_penalty
         self.fallback = LockedWeightedRrfTop10Reranker()
         self._profiles: dict[str, Mapping[str, Any]] = {}
         self._short_term: dict[str, ShortTermSummary] = {}
         self._asked_attributes: dict[str, tuple[str, ...]] = {}
+        self._context_snapshots: dict[str, Any] = {}
+        self._intent_contexts: dict[str, Mapping[str, Any]] = {}
         self.last_preselected_ids: tuple[str, ...] = ()
         self.last_model_result: LLMRankResult | None = None
         self.last_conflicts: tuple[ConstraintConflict, ...] = ()
+        self.last_hard_missing: dict[str, tuple[str, ...]] = {}
         self.last_pool_metrics: CandidatePoolMetrics | None = None
         self.last_strategy: str = "hybrid"
+        self.last_prompt_candidate_count: int = 0
+        self.last_prompt_chars: int = 0
+        self.last_prompt_tokens: int = 0
 
     def set_session_context(
         self,
@@ -354,8 +378,15 @@ class HybridContextualReranker:
         requirements: Requirements | None = None,
         short_term: ShortTermSummary | None = None,
         asked_attributes: Sequence[str] = (),
+        context_snapshot: Any | None = None,
+        intent_context: Mapping[str, Any] | None = None,
     ) -> None:
-        self._profiles[session_id] = user_profile or {}
+        self._profiles[session_id] = merge_profile_with_snapshot(
+            user_profile,
+            context_snapshot,
+        )
+        self._context_snapshots[session_id] = context_snapshot
+        self._intent_contexts[session_id] = dict(intent_context or {})
         if short_term is not None:
             self._short_term[session_id] = short_term
         elif requirements is not None:
@@ -413,24 +444,48 @@ class HybridContextualReranker:
         )
         preselected_ids = tuple(preselected_ids[: self.top_n])
         self.last_preselected_ids = preselected_ids
+        self.last_prompt_candidate_count = 0
+        self.last_prompt_chars = 0
+        self.last_prompt_tokens = 0
 
         candidate_by_id = {candidate.parent_asin: candidate for candidate in candidates}
         profile_boosts = self._profile_boost(
             candidate_by_id,
             session_id=candidate_set.session_id,
         )
-        if profile_boosts:
-            preselected_ids = tuple(
-                sorted(
-                    preselected_ids,
-                    key=lambda parent_asin: (
-                        -(fallback_scores.get(parent_asin, 0.0)
-                          + profile_boosts.get(parent_asin, 0.0)),
-                        parent_asin,
-                    ),
-                )
+        selected_candidates = [candidate_by_id[parent_asin] for parent_asin in preselected_ids]
+        missing_by_id = {
+            candidate.parent_asin: evaluate_hard_constraints(
+                candidate,
+                candidate_set.requirements,
             )
+            for candidate in selected_candidates
+        }
+        self.last_hard_missing = missing_by_id
+        plan = parse_intent(
+            candidate_set.requirements.category,
+            candidate_set.requirements.hard_constraints,
+            candidate_set.requirements.soft_preferences,
+        )
+        hard_term_count = max(1, len(plan.hard_terms))
+        hard_penalty_by_id = {
+            parent_asin: self.hard_constraint_penalty
+            * (len(missing_by_id[parent_asin]) / hard_term_count)
+            for parent_asin in preselected_ids
+        }
 
+        preselected_ids = tuple(
+            sorted(
+                preselected_ids,
+                key=lambda parent_asin: (
+                    -(fallback_scores.get(parent_asin, 0.0)
+                      + profile_boosts.get(parent_asin, 0.0)
+                      - hard_penalty_by_id[parent_asin]),
+                    parent_asin,
+                ),
+            )
+        )
+        self.last_preselected_ids = preselected_ids
         selected_candidates = [candidate_by_id[parent_asin] for parent_asin in preselected_ids]
         hard_hit_rate = hard_constraint_hit_rate(
             selected_candidates,
@@ -444,26 +499,34 @@ class HybridContextualReranker:
             hard_hit_rate=hard_hit_rate,
         )
         self.last_strategy = strategy
+        prompt_candidate_limit = min(self.top_n, max(top_k * 2, 10))
+        prompt_candidate_ids = tuple(preselected_ids[:prompt_candidate_limit])
+        prompt_candidates = [
+            candidate_by_id[parent_asin] for parent_asin in prompt_candidate_ids
+        ]
         model_result: LLMRankResult | None = None
         pointwise_scores: dict[str, float] = {}
         if self.llm_ranker is not None and strategy == "hybrid":
+            self.last_prompt_candidate_count = len(prompt_candidate_ids)
             try:
                 if isinstance(self.llm_ranker, Qwen3Reranker):
                     pointwise_scores = self.llm_ranker.score_candidates(
                         candidate_set.requirements,
-                        selected_candidates,
+                        prompt_candidates,
                         user_profile=self._profiles.get(candidate_set.session_id),
                     )
                 else:
                     prompt = build_rerank_prompt(
                         candidate_set.requirements,
-                        selected_candidates,
+                        prompt_candidates,
                         top_k=top_k,
                         user_profile=self._profiles.get(candidate_set.session_id),
                     )
+                    self.last_prompt_chars = len(prompt)
+                    self.last_prompt_tokens = estimate_prompt_tokens(prompt)
                     model_result = self.llm_ranker.rank(
                         prompt,
-                        allowed_ids=preselected_ids,
+                        allowed_ids=prompt_candidate_ids,
                         top_k=top_k,
                     )
             except Exception:
@@ -471,7 +534,10 @@ class HybridContextualReranker:
         self.last_model_result = model_result
 
         if pointwise_scores:
-            fallback_values = [fallback_scores.get(parent_asin, 0.0) for parent_asin in preselected_ids]
+            fallback_values = [
+                fallback_scores.get(parent_asin, 0.0)
+                for parent_asin in prompt_candidate_ids
+            ]
             fallback_min = min(fallback_values)
             fallback_max = max(fallback_values)
             fallback_norm = {
@@ -479,17 +545,18 @@ class HybridContextualReranker:
                     (fallback_scores.get(parent_asin, 0.0) - fallback_min)
                     / max(fallback_max - fallback_min, 1e-9)
                 )
-                for parent_asin in preselected_ids
+                for parent_asin in prompt_candidate_ids
             }
             fused_scores = {
                 parent_asin: (
                     fallback_norm[parent_asin]
                     + self.pointwise_weight * pointwise_scores.get(parent_asin, 0.0)
+                    - hard_penalty_by_id[parent_asin]
                 )
-                for parent_asin in preselected_ids
+                for parent_asin in prompt_candidate_ids
             }
             ranked_ids = sorted(
-                preselected_ids,
+                prompt_candidate_ids,
                 key=lambda parent_asin: (-fused_scores[parent_asin], parent_asin),
             )[:top_k]
             ranked_scores = tuple(pointwise_scores[parent_asin] for parent_asin in ranked_ids)
@@ -519,6 +586,16 @@ class HybridContextualReranker:
                 for parent_asin in preselected_ids
                 if parent_asin not in ranked_ids
             )
+            original_positions = {
+                parent_asin: index for index, parent_asin in enumerate(ranked_ids)
+            }
+            ranked_ids = sorted(
+                ranked_ids,
+                key=lambda parent_asin: (
+                    int(len(missing_by_id.get(parent_asin, ())) > 0),
+                    original_positions[parent_asin],
+                ),
+            )
             ranked_ids = ranked_ids[:top_k]
         else:
             ranked_ids = list(preselected_ids[:top_k])
@@ -543,6 +620,7 @@ class HybridContextualReranker:
                     f"fallback_score:{fallback_scores.get(parent_asin, 0.0):.6f}",
                     f"preselect_rank:{preselected_ids.index(parent_asin) + 1}",
                     f"strategy:{strategy}",
+                    f"hard_missing:{','.join(missing_by_id.get(parent_asin, ())) or 'none'}",
                     f"reason:{model_reasons.get(parent_asin, 'locked rank')}",
                 ),
             )
