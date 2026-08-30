@@ -29,7 +29,7 @@ Top10Reranker.rerank(...)
 | 三轮 buying/browsing 反事实 Agent 命中 | 198/200 |
 | MRR | 0.913042 |
 | MTTC | 3.08 |
-| 单元测试 | 5/5 |
+| 单元测试 | 6/6 |
 
 重要：三轮 Agent 结果来自把公开集投影为 100 buying + 100 browsing 的诊断，不是原始四场景官方分数。`boundary` 和 `intent_override` 不能保证两次 `other` 后得到同样的完整信息。
 

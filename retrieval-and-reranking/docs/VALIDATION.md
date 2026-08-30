@@ -16,7 +16,7 @@ Windows 的长路径环境 `.venv-clean` 在安装 PyTorch 时触发 `WinError 2
 
 | 检查 | 结果 |
 |---|---:|
-| 单元测试 | 5/5 passed |
+| 单元测试 | 6/6 passed |
 | exact Top50 target coverage | 199/200 |
 | locked Top10 target hit | 198/200 |
 | 三轮反事实 HitRate@10 | 0.99 |
@@ -57,3 +57,15 @@ Lite 模式用于无第三方依赖的接口测试和降级：
 - 私有 800 条会话
 
 Top10 重排器只接收 `CandidateSet`，没有 catalog 句柄，也不能向候选集合外添加商品。公开标签只在离线验证脚本中用于计算指标。
+
+## 私有 GitHub Release 安装验证
+
+完整非 Python 资源包已发布为团队私有仓库的 Release asset。验证使用一个不含 catalog 和 resources 的干净源码归档执行：
+
+```powershell
+python -m scripts.install_assets
+python -m unittest discover -s tests -v
+python -m scripts.validate_pipeline --mode exact
+```
+
+安装器通过已登录的 GitHub CLI 下载私有 Release，验证整个 ZIP 的 SHA256，解压后再次验证 catalog、模型权重、embeddings 和 parent-ASIN 文件。结果为 6/6 测试通过、Top50 199/200、locked Top10 198/200。
