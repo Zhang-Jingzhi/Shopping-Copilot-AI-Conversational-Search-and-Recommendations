@@ -1,0 +1,98 @@
+{
+  "dataset_kind": "strict public-schema-compatible local proxy; not organizer/private data",
+  "generator": "experiments.generate_contract_matched_sessions",
+  "generator_version": 1,
+  "seed": 20260828,
+  "counts": {
+    "catalog_products": 50000,
+    "test_rows_scanned": 2524981,
+    "public_targets_excluded": 200,
+    "generated_sessions": 3021,
+    "official_hidden_fields_materialized": 3021
+  },
+  "schema": {
+    "session_fields_exactly_match_public": [
+      "category_bucket",
+      "difficulty_bucket",
+      "ground_truth",
+      "sample_id",
+      "scenario_type",
+      "user_profile"
+    ],
+    "profile_fields_exactly_match_public": [
+      "average_prior_rating",
+      "preference_tags",
+      "purchase_frequency",
+      "rating_style",
+      "summary"
+    ],
+    "category_bucket_constant": "clothing"
+  },
+  "profile_calibration": {
+    "public_rating_counts": {
+      "1": 14,
+      "2": 9,
+      "3": 22,
+      "4": 21,
+      "5": 134
+    },
+    "generated_rating_counts": {
+      "1": 212,
+      "2": 136,
+      "3": 332,
+      "4": 317,
+      "5": 2024
+    },
+    "purchase_frequency": "3-4 prior purchases",
+    "rating_style_mapping": {
+      "5": "usually positive",
+      "4": "mixed",
+      "3": "critical",
+      "2": "critical",
+      "1": "critical"
+    },
+    "tag_policy": "empty list: public tag algorithm is not identifiable from released inputs",
+    "tag_count_per_session": 0
+  },
+  "scenario_counts": {
+    "boundary": 151,
+    "browsing": 1208,
+    "buying": 1209,
+    "intent_override": 453
+  },
+  "tier_counts": {
+    "high_confidence": 1065,
+    "low_likelihood": 1644,
+    "probable": 144,
+    "uncertain": 168
+  },
+  "input_sha256": {
+    "catalog": "DA979B05A68AF864CB0DCF9EE6A81C010C7E66A57978AD286C7A2E005FC69A67",
+    "public_set": "571359A8A69014C43FC30D39C996C4A28E875DCCC249DFFC707358757BEB16C0",
+    "test_split": "BDA2E59453ADC8E9CFA1523D053A826C481FA6AF2A39B8BF5BA9FBB51829869E",
+    "product_tiers": "B5F4598E2497DDFE506D34426E6393BE9EBD494193888855B9D9F3B8390BAAA0"
+  },
+  "outputs": {
+    "sessions": {
+      "path": "experiments\\results\\synthetic_contract_matched_all_3021.jsonl",
+      "sha256": "4B9B9BFFBD6747C9EC0B8C780EA790F6270F70DBF2582EB7193F7F54ABF8E20C"
+    },
+    "tiers": {
+      "path": "experiments\\results\\synthetic_contract_matched_all_3021_tiers.jsonl",
+      "sha256": "40AE89133EC68F76E6DE5E2613C9CB23712D2BC2EEEDD7D9392BC06D80C622C9"
+    }
+  },
+  "confirmed": [
+    "Every session has exactly the public session and profile field names in the same order.",
+    "category_bucket, scenario proportions, rating-style mapping, and purchase-frequency label follow public observations.",
+    "Each assigned average_prior_rating proxy is an observed target-interaction rating available for that target in the local LLO test split; this does not establish a user-history average.",
+    "The unmodified local evaluator materializes every session."
+  ],
+  "not_reconstructed": [
+    "Organizer source-user selection for multi-event targets.",
+    "Organizer purchase-frequency, average-rating, and preference-tag algorithms.",
+    "The source user's prior rating sequence and the aggregation that would produce a real average_prior_rating.",
+    "Preference tags; they are deliberately [] and the summary says unavailable.",
+    "Private 800 target membership or profile distribution."
+  ]
+}

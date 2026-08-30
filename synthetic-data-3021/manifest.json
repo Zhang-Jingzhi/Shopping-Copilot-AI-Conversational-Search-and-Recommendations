@@ -1,0 +1,79 @@
+{
+  "package_kind": "data-only local extension package; retrieval experiments and bad-case analyses excluded",
+  "generated_sessions": 3021,
+  "public_reference_sessions": 200,
+  "quality_tiers": {
+    "high_confidence": 1065,
+    "probable": 144,
+    "uncertain": 168,
+    "low_likelihood": 1644
+  },
+  "external_inputs": {
+    "catalog": "DA979B05A68AF864CB0DCF9EE6A81C010C7E66A57978AD286C7A2E005FC69A67",
+    "public_set": "571359A8A69014C43FC30D39C996C4A28E875DCCC249DFFC707358757BEB16C0",
+    "test_split": "BDA2E59453ADC8E9CFA1523D053A826C481FA6AF2A39B8BF5BA9FBB51829869E",
+    "product_tiers": "B5F4598E2497DDFE506D34426E6393BE9EBD494193888855B9D9F3B8390BAAA0"
+  },
+  "files": [
+    {
+      "path": "data/synthetic_contract_matched_all_3021.jsonl",
+      "bytes": 1227248,
+      "sha256": "4B9B9BFFBD6747C9EC0B8C780EA790F6270F70DBF2582EB7193F7F54ABF8E20C"
+    },
+    {
+      "path": "data/synthetic_contract_matched_all_3021_tiers.jsonl",
+      "bytes": 515390,
+      "sha256": "40AE89133EC68F76E6DE5E2613C9CB23712D2BC2EEEDD7D9392BC06D80C622C9"
+    },
+    {
+      "path": "data/synthetic_contract_matched_all_3021_quality.json",
+      "bytes": 3468,
+      "sha256": "A6FE5D006848A41FC4DC542E149191729411AD038D479FFC8CF09ABE711D75D1"
+    },
+    {
+      "path": "data/product_filter_inference_3021.csv",
+      "bytes": 519256,
+      "sha256": "B5F4598E2497DDFE506D34426E6393BE9EBD494193888855B9D9F3B8390BAAA0"
+    },
+    {
+      "path": "scripts/generate_contract_matched_sessions.py",
+      "bytes": 17784,
+      "sha256": "DB6570F3D62F1C6BC49E71E52F2D14B062A529D4C6E991F7A3DB42675031E31C"
+    },
+    {
+      "path": "scripts/infer_quality_filter.py",
+      "bytes": 24964,
+      "sha256": "BFF750C5E40772D0D661D51B5F1604C8B305B84226EACD5F792191A440963ACF"
+    },
+    {
+      "path": "scripts/product_filter_inference_protocol.md",
+      "bytes": 1584,
+      "sha256": "C099CF8B8D31389C6B242642FA7A51089C17480904EC10367B2B623AE764530E"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1761,
+      "sha256": "DF73DB1D80D27C16D39FA9EF57A362277F5F53D4BBA63D5992A5707FFAE95D54"
+    },
+    {
+      "path": "data/schema_alignment.json",
+      "bytes": 5824,
+      "sha256": "AC5C8A2E83184C88D9DC4508B73CAD32E9A83C63D4E4451FD22AE1B3200068F7"
+    },
+    {
+      "path": "data/construction_lineage.json",
+      "bytes": 4511,
+      "sha256": "6C031AEEBEAC4D359670F621BCC94810D1D89B8863448976A0E40E869D2ACB1D"
+    },
+    {
+      "path": "data/tier_summary.csv",
+      "bytes": 648,
+      "sha256": "0B58070B78DA4E3E821233336B5BC6C0B42A8BC6F1BFABA64E3C5C532E5434A6"
+    },
+    {
+      "path": "report.html",
+      "bytes": 12734,
+      "sha256": "4E32E17B75410769DC7CF80B652B0232F63299A64E569FD76DAFFFA563B8A6DC"
+    }
+  ]
+}
