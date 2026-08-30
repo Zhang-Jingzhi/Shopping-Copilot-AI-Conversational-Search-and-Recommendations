@@ -51,7 +51,7 @@ C:\venvs\techjam-agent\Scripts\python.exe -m scripts.evaluate_full_requirements
 
 Expected final checks:
 
-- 5 unit tests pass.
+- 6 unit tests pass.
 - Top50 coverage is 199/200.
 - Top10 hit count is 198/200.
 - Counterfactual three-turn HitRate@10 is 0.99.
