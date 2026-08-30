@@ -77,6 +77,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=1024)
+    parser.add_argument("--log-interval", type=int, default=50, help="Print training progress every N steps; 0 disables")
     parser.add_argument("--negatives-per-positive", type=int, default=4, help="Public negatives per positive")
     parser.add_argument("--synthetic-negatives-per-positive", type=int, default=4)
     parser.add_argument("--public-positive-weight", type=float, default=5.0)
@@ -278,7 +279,9 @@ def train(args: argparse.Namespace) -> None:
         total = 0
         correct = 0
         model.train()
+        steps_in_epoch = (len(train_examples) + args.batch_size - 1) // args.batch_size
         for start in range(0, len(train_examples), args.batch_size):
+            step = start // args.batch_size + 1
             batch = train_examples[start : start + args.batch_size]
             inputs, labels, weights = _encode_batch(tokenizer, batch, device, args.max_length)
             labels_tensor = torch.tensor(labels, dtype=torch.float32, device=device)
@@ -293,6 +296,20 @@ def train(args: argparse.Namespace) -> None:
             correct += int((predictions == labels_tensor).sum().item())
             total += len(batch)
             total_loss += float(loss.item()) * len(batch)
+            if args.log_interval > 0 and step % args.log_interval == 0:
+                print(
+                    json.dumps(
+                        {
+                            "epoch": epoch,
+                            "epochs": args.epochs,
+                            "step": step,
+                            "steps_in_epoch": steps_in_epoch,
+                            "step_loss": round(float(loss.item()), 6),
+                            "running_accuracy": round(correct / max(1, total), 6),
+                        }
+                    ),
+                    flush=True,
+                )
         train_accuracy = correct / max(1, total)
         valid_accuracy = evaluate(
             tokenizer, model, valid_examples, device, args.max_length, args.batch_size
@@ -311,12 +328,14 @@ def train(args: argparse.Namespace) -> None:
             json.dumps(
                 {
                     "epoch": epoch,
+                    "epochs": args.epochs,
                     "train_loss": round(total_loss / max(1, total), 6),
                     "train_accuracy": round(train_accuracy, 6),
                     "valid_accuracy": round(valid_accuracy, 6),
                     "public_accuracy": round(public_accuracy, 6),
                 }
-            )
+            ),
+            flush=True,
         )
 
     if best_state_dict is not None:
