@@ -1,23 +1,25 @@
 {
-  "data_strategy": "public",
-  "positive_examples": 4,
-  "negative_examples": 16,
-  "train_examples": 15,
-  "valid_examples": 5,
+  "data_strategy": "aligned",
+  "positive_examples": 1409,
+  "negative_examples": 10472,
+  "train_examples": 10090,
+  "valid_examples": 1791,
   "public_validation_examples": 1000,
   "trainable_parameters": 5047296,
-  "best_public_accuracy": 0.986,
+  "best_public_accuracy": 1.0,
   "selected_epoch": 1,
   "distribution": {
-    "total_examples": 20,
-    "positive_examples": 4,
-    "negative_examples": 16,
-    "public_examples": 20,
-    "synthetic_examples": 0,
+    "total_examples": 11881,
+    "positive_examples": 1409,
+    "negative_examples": 10472,
+    "public_examples": 1000,
+    "synthetic_examples": 10881,
     "tier_counts": {
-      "public": 20
+      "high_confidence": 9585,
+      "probable": 1296,
+      "public": 1000
     },
-    "weighted_positive_ratio": 0.555556
+    "weighted_positive_ratio": 0.276267
   },
   "adapter_checkpoint": "ranking_pipeline\\checkpoints\\qwen3-reranker-0.6B-shopping-lora",
   "lora": {
