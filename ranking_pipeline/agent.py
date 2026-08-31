@@ -8,15 +8,12 @@ called directly with this adapter by ``ranking_pipeline.evaluate_agent``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from techjam_agent.agent import Agent as BaseAgent
-from techjam_agent.dialogue import RequirementsCollector as BaseRequirementsCollector
 from techjam_agent.ranking import LockedWeightedRrfTop10Reranker
 
-from ranking_pipeline.context import ShortTermSummary, parse_override_message
 from ranking_pipeline.contextual_ranking import (
     HybridContextualReranker,
     RecommendationClarificationPolicy,
@@ -26,46 +23,6 @@ from ranking_pipeline.memory_context import (
 )
 from ranking_pipeline.override_aware_agent import OverrideAwareRequirementsCollector
 from ranking_pipeline.qwen_reranker import Qwen3Reranker
-
-
-@dataclass
-class ContextualRequirementsCollector(BaseRequirementsCollector):
-    """The official collector plus profile and intent-override bookkeeping."""
-
-    user_profile: dict = field(default_factory=dict)
-    override_turns: list[int] = field(default_factory=list)
-
-    def observe(self, user_message: str, turn: int) -> None:
-        if turn == 1:
-            super().observe(user_message, turn)
-            return
-        replacements = parse_override_message(user_message)
-        if replacements:
-            self.hard_constraints = list(
-                dict.fromkeys((*self.hard_constraints, *replacements))
-            )
-            replacement_set = set(replacements)
-            self.soft_preferences = [
-                value for value in self.soft_preferences if value not in replacement_set
-            ]
-            self.override_turns.append(turn)
-            return
-        super().observe(user_message, turn)
-
-    def short_term_summary(self) -> ShortTermSummary:
-        return ShortTermSummary(
-            requirements=self.requirements(),
-            clarification_turns=tuple(str(index) for index in range(self.other_reply_count)),
-            override_turns=tuple(self.override_turns),
-        )
-
-    def context_payload(self) -> dict[str, Any]:
-        return {
-            "requirements": self.requirements(),
-            "user_profile": self.user_profile,
-            "override_turns": tuple(self.override_turns),
-            "other_reply_count": self.other_reply_count,
-        }
 
 
 class RankingAgent(BaseAgent):
@@ -143,7 +100,7 @@ class RankingAgent(BaseAgent):
             self._state_memory.sessions.pop(session_id, None)
         self._configure_reranker(session_id, collector)
 
-    def _configure_reranker(self, session_id: str, collector: ContextualRequirementsCollector) -> None:
+    def _configure_reranker(self, session_id: str, collector: OverrideAwareRequirementsCollector) -> None:
         set_session_context = getattr(self.reranker, "set_session_context", None)
         if set_session_context is None:
             return
@@ -269,4 +226,4 @@ class RankingAgent(BaseAgent):
         )
 
 
-__all__ = ["ContextualRequirementsCollector", "RankingAgent"]
+__all__ = ["RankingAgent"]

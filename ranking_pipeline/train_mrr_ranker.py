@@ -519,7 +519,9 @@ def _evaluate_groups(
     reciprocal_ranks: list[float] = []
     correct_top1 = 0
     with torch.inference_mode():
-        for group in groups:
+        total_groups = len(groups)
+        eval_started_at = time.perf_counter()
+        for eval_index, group in enumerate(groups, start=1):
             examples = _group_to_examples(group, catalog=catalog)
             if not examples:
                 continue
@@ -539,6 +541,20 @@ def _evaluate_groups(
             rank = order.index(target_index) + 1
             reciprocal_ranks.append(1.0 / rank)
             correct_top1 += int(order[0] == target_index)
+            if eval_index % 50 == 0 or eval_index == total_groups:
+                print(
+                    json.dumps(
+                        {
+                            "phase": "evaluate_groups",
+                            "step": eval_index,
+                            "steps": total_groups,
+                            "running_mrr": round(sum(reciprocal_ranks) / max(1, len(reciprocal_ranks)), 6),
+                            "running_top1_accuracy": round(correct_top1 / max(1, len(reciprocal_ranks)), 6),
+                            "elapsed_seconds": round(time.perf_counter() - eval_started_at, 1),
+                        }
+                    ),
+                    flush=True,
+                )
     return {
         "mrr": sum(reciprocal_ranks) / max(1, len(reciprocal_ranks)),
         "top1_accuracy": correct_top1 / max(1, len(reciprocal_ranks)),
