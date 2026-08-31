@@ -88,6 +88,51 @@ class StateMemoryManagerTests(unittest.TestCase):
         snapshot = self.update("women size M", {"candidate_count": 1000})
         self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
 
+    def test_explicitly_clearing_a_constraint_removes_old_slot_and_rejection(self):
+        self.update("I need a black dress under $80")
+        snapshot = self.update("Any color is fine; ignore my earlier budget.")
+        self.assertNotIn("color", snapshot.must_match)
+        self.assertNotIn("price_max", snapshot.must_match)
+        self.assertNotIn("color", snapshot.must_not_match)
+        self.assertIn("color", snapshot.debug["erased_slots"])
+        self.assertIn("price_max", snapshot.debug["erased_slots"])
+
+    def test_replacing_color_does_not_imply_the_old_color_is_rejected(self):
+        self.update("I need a black dress")
+        snapshot = self.update("Actually, blue instead")
+        self.assertEqual(snapshot.must_match["color"], "blue")
+        self.assertNotIn("color", snapshot.must_not_match)
+
+    def test_clarification_is_capped_and_retrieval_is_forced_before_turn_limit(self):
+        snapshot = self.update("show me something", {"candidate_count": 1000})
+        self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+        snapshot = self.update("still browsing", {"candidate_count": 1000})
+        self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+        snapshot = self.update("show more", {"candidate_count": 1000})
+        self.assertIn(
+            snapshot.action,
+            {NextAction.RETRIEVE_BUYING, NextAction.RETRIEVE_BROWSING},
+        )
+        self.assertEqual(snapshot.debug["clarification_count"], 2)
+
+        for _ in range(5):
+            snapshot = self.update("still looking", {"candidate_count": 1000})
+        self.assertGreaterEqual(self.manager.sessions["s1"].turn_id, 8)
+        self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+        self.assertTrue(snapshot.debug["forced_retrieval"])
+
+    def test_catalog_aware_extraction_captures_brand_feature_and_rating(self):
+        snapshot = self.update("I need Columbia waterproof shoes rated 4 stars")
+        self.assertEqual(snapshot.must_match["brand"], "Columbia")
+        self.assertTrue(snapshot.must_match["feature_waterproof"])
+        self.assertEqual(snapshot.must_match["rating_min"], 4.0)
+
+    def test_catalog_aware_extraction_captures_apparel_attributes(self):
+        snapshot = self.update("I need a floral long sleeve relaxed dress")
+        self.assertIn("floral", snapshot.should_match["pattern"])
+        self.assertIn("long sleeve", snapshot.should_match["sleeve"])
+        self.assertIn("relaxed", snapshot.should_match["fit"])
+
 
 if __name__ == "__main__":
     unittest.main()
