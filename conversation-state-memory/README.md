@@ -51,7 +51,7 @@ docs/                 API 与设计契约
 | `src/state_memory/models.py` | 定义所有数据契约：短期会话状态 `SessionState`、槽位 `Slot`、长期画像 `UserProfile`、状态变更 `StateDelta` 与下游输出 `ContextSnapshot`。 |
 | `src/state_memory/manager.py` | 对外主入口。维护按 session/user 隔离的内存状态，协调抽取、状态机、画像蒸馏和上下文编程。调用方通常只需使用 `update()` 与 `apply_retrieval_feedback()`。 |
 | `src/state_memory/extractor.py` | 确定性英文规则抽取器。识别 Buying/Browsing/Compare 意图，以及类别、颜色、预算、材质、尺码、场景、风格、服饰属性、评分和显式排除。 |
-| `src/state_memory/catalog_lexicon.py` | 从本地比赛 catalog 构建并缓存类别、`store` 品牌、以及 catalog 实际存在的功能属性词表；避免把未在商品数据中出现的功能强行写入状态。 |
+| `src/state_memory/catalog_lexicon.py` | 从本地比赛 catalog 构建并缓存完整类别、`store` 品牌、功能属性，以及 `details` 中与购买决策相关的属性和值；避免把未在商品数据中出现的功能强行写入状态。 |
 | `src/state_memory/state_machine.py` | 多轮状态更新规则。负责新增槽位、更新同名条件、处理 `not / without / ignore` 等撤销、类别切换时的兼容性清理，以及会话摘要。 |
 | `src/state_memory/profile.py` | 从多轮观测中蒸馏稳定偏好；当前轮硬约束始终优先于长期画像。 |
 | `src/state_memory/context_program.py` | 将状态转成 `ContextSnapshot`，选择 Buying filter 或 Browsing dense 路由，并限制主动澄清次数，防止对话接近 10 轮上限。 |
@@ -80,6 +80,8 @@ snapshot = manager.update(
 )
 ```
 
+首次加载后，词表会写入 `conversation-state-memory/.cache/catalog_lexicon.json`。缓存记录 catalog 文件名、文件大小和修改时间；任一项变化时会自动重新读取 catalog 并原子替换缓存文件。该缓存已纳入版本控制，供克隆仓库后的运行直接复用；若部署目录不可写，组件会自动回退为仅进程内缓存。
+
 上例会产生类似的硬条件：
 
 ```python
@@ -91,7 +93,7 @@ snapshot = manager.update(
 }
 ```
 
-当前支持的 catalog 相关属性包括类别、品牌（`store`）、已在 catalog 中出现的常见功能属性、评分与评论数；服饰规则还支持 `fit`、`sleeve` 和 `pattern`。用户说“any color is fine”或“ignore my earlier budget”时，状态机会删除对应的旧条件；“blue instead”会覆盖颜色，但不会把旧颜色误记为禁止项。
+当前支持的 catalog 相关属性包括完整类别、品牌（`store`）、已在 catalog 中出现的常见功能属性、评分与评论数。组件还会从每条商品的 `details` 字段动态收集材质、颜色、闭合方式、领型、袖型、版型、图案、场景／运动、季节、护理方式、鞋底／内外材质、鞋宽等结构化值；服饰规则另支持 `fit`、`sleeve` 和 `pattern`。用户说“any color is fine”或“ignore my earlier budget”时，状态机会删除对应的旧条件；“blue instead”会覆盖颜色，但不会把旧颜色误记为禁止项。
 
 ## 澄清与轮次保护
 

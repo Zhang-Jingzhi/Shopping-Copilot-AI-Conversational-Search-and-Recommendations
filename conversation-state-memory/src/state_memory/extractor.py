@@ -72,6 +72,16 @@ class RuleBasedExtractor:
                     rejected.setdefault("feature", []).append(feature)
                 else:
                     slots.append(ExtractedSlot(name, True, ConstraintType.HARD, 0.85))
+            for name, value in self.catalog_lexicon.match_attributes(text):
+                if self._is_rejected(text, value):
+                    rejected.setdefault(name, []).append(value)
+                    continue
+                constraint_type = (
+                    ConstraintType.SOFT
+                    if name in {"fit", "pattern", "style", "occasion", "sport", "season", "care"}
+                    else ConstraintType.HARD
+                )
+                slots.append(ExtractedSlot(name, value, constraint_type, 0.9))
         for color in self.COLORS:
             if re.search(rf"\b{color}\b", text):
                 target = rejected if re.search(rf"\b(no|not|don't want|do not want)\s+{color}\b", text) else None

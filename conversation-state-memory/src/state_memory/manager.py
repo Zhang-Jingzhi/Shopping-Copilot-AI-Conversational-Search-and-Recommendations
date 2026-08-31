@@ -13,11 +13,19 @@ from .state_machine import DynamicStateMachine
 class StateMemoryManager:
     """In-memory state manager; persist sessions/profiles outside this class if needed."""
 
-    def __init__(self, catalog_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path | None = None,
+        catalog_cache_path: str | Path | None = None,
+    ) -> None:
         self.sessions: dict[str, SessionState] = {}
         self.profiles: dict[str, UserProfile] = {}
         resolved_catalog = self._resolve_catalog_path(catalog_path)
-        lexicon = CatalogLexicon.from_jsonl(resolved_catalog) if resolved_catalog else None
+        lexicon = (
+            CatalogLexicon.from_jsonl(resolved_catalog, cache_path=catalog_cache_path)
+            if resolved_catalog
+            else None
+        )
         self.extractor = RuleBasedExtractor(catalog_lexicon=lexicon)
         self.state_machine = DynamicStateMachine()
         self.profile_distiller = ProfileDistiller()

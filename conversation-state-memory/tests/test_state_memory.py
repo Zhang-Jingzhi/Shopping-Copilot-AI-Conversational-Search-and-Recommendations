@@ -1,5 +1,7 @@
 import sys
 import unittest
+import json
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -132,6 +134,62 @@ class StateMemoryManagerTests(unittest.TestCase):
         self.assertIn("floral", snapshot.should_match["pattern"])
         self.assertIn("long sleeve", snapshot.should_match["sleeve"])
         self.assertIn("relaxed", snapshot.should_match["fit"])
+
+    def test_catalog_details_expand_structured_attribute_vocabulary(self):
+        product = {
+            "parent_asin": "test",
+            "categories": ["Clothing, Shoes & Jewelry", "Women", "Dresses", "Wrap Dresses"],
+            "store": "Example Brand",
+            "title": "Example dress",
+            "features": [],
+            "details": {
+                "Closure Type": "Zipper",
+                "Neck Style": "V Neck",
+                "Product Care Instructions": "Machine Wash",
+                "Sport Type": "Running",
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = Path(directory) / "catalog.jsonl"
+            cache_path = Path(directory) / "cache" / "lexicon.json"
+            catalog_path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            manager = StateMemoryManager(
+                catalog_path=catalog_path,
+                catalog_cache_path=cache_path,
+            )
+            snapshot = manager.update(
+                "catalog-session",
+                "catalog-user",
+                "Show an Example Brand wrap dresses with zipper, v neck, machine wash for running",
+            )
+        self.assertEqual(snapshot.must_match["brand"], "Example Brand")
+        self.assertEqual(snapshot.must_match["closure"], "Zipper")
+        self.assertEqual(snapshot.must_match["neckline"], "V Neck")
+        self.assertIn("Machine Wash", snapshot.should_match["care"])
+        self.assertIn("Running", snapshot.should_match["sport"])
+
+    def test_catalog_lexicon_is_cached_on_disk_and_invalidated_on_change(self):
+        product = {
+            "parent_asin": "test",
+            "categories": ["Clothing", "Jackets"],
+            "store": "Cache Brand",
+            "title": "Test jacket",
+            "features": ["Waterproof"],
+            "details": {"Closure Type": "Zipper"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = Path(directory) / "catalog.jsonl"
+            cache_path = Path(directory) / "cache" / "lexicon.json"
+            catalog_path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            manager = StateMemoryManager(catalog_path=catalog_path, catalog_cache_path=cache_path)
+            self.assertTrue(cache_path.is_file())
+            self.assertEqual(manager.update("cache-1", "user", "Cache Brand zipper jacket").must_match["closure"], "Zipper")
+
+            product["details"] = {"Closure Type": "Buttons"}
+            catalog_path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            refreshed = StateMemoryManager(catalog_path=catalog_path, catalog_cache_path=cache_path)
+            snapshot = refreshed.update("cache-2", "user", "Cache Brand buttons jacket")
+            self.assertEqual(snapshot.must_match["closure"], "Buttons")
 
 
 if __name__ == "__main__":
