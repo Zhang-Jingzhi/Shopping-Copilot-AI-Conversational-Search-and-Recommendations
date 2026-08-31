@@ -484,7 +484,15 @@ def _load_peft_model(
         adapter_checkpoint = Path(adapter_checkpoint)
         if not adapter_checkpoint.is_dir():
             raise ValueError(f"--adapter-checkpoint must be a directory: {adapter_checkpoint}")
-        model = PeftModel.from_pretrained(model, str(adapter_checkpoint), is_trainable=True)
+        if not (adapter_checkpoint / "adapter_config.json").is_file():
+            raise FileNotFoundError(
+                f"Adapter checkpoint is missing adapter_config.json: {adapter_checkpoint}"
+            )
+        if not (adapter_checkpoint / "adapter_model.safetensors").is_file():
+            raise FileNotFoundError(
+                f"Adapter checkpoint is missing adapter_model.safetensors: {adapter_checkpoint}"
+            )
+        model = PeftModel.from_pretrained(model, adapter_checkpoint, is_trainable=True)
     else:
         model = get_peft_model(model, lora_config)
     model.to(device)
