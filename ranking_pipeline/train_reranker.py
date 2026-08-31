@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -78,8 +79,62 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=1024)
     parser.add_argument("--log-interval", type=int, default=50, help="Print training progress every N steps; 0 disables")
+    parser.add_argument(
+        "--save-every-epoch",
+        action="store_true",
+        default=True,
+        help="Save a checkpoint after every epoch (default)",
+    )
+    parser.add_argument(
+        "--no-save-every-epoch",
+        action="store_false",
+        dest="save_every_epoch",
+        help="Save only the best checkpoint after training finishes",
+    )
+    parser.add_argument(
+        "--load-in-4bit",
+        action="store_true",
+        default=True,
+        help="Load the base model with BitsAndBytes 4-bit quantization (default)",
+    )
+    parser.add_argument(
+        "--no-load-in-4bit",
+        action="store_false",
+        dest="load_in_4bit",
+        help="Disable 4-bit quantization and load the base model in full precision",
+    )
     parser.add_argument("--negatives-per-positive", type=int, default=4, help="Public negatives per positive")
-    parser.add_argument("--synthetic-negatives-per-positive", type=int, default=4)
+    parser.add_argument(
+        "--loss",
+        choices=("bce", "listwise"),
+        default="bce",
+        help="Training objective: pointwise BCE or listwise contrastive",
+    )
+    parser.add_argument(
+        "--public-top-k",
+        type=int,
+        default=0,
+        help="Use retrieval Top-K candidates as public negatives; 0 uses sampled negatives",
+    )
+    parser.add_argument(
+        "--public-retrieval-mode",
+        choices=("lite", "exact"),
+        default="lite",
+        help="Retrieval stage used for public Top-K candidate generation",
+    )
+    parser.add_argument("--synthetic-negatives-per-positive", type=int, default=8)
+    parser.add_argument(
+        "--synthetic-hard-negatives-per-positive",
+        type=int,
+        default=4,
+        help="Number of negatives taken from retrieval Top-K before category sampling",
+    )
+    parser.add_argument(
+        "--synthetic-retrieval-mode",
+        choices=("lite", "exact"),
+        default="lite",
+        help="Retrieval stage used for hard-negative mining",
+    )
     parser.add_argument("--public-positive-weight", type=float, default=5.0)
     parser.add_argument("--public-negative-weight", type=float, default=1.0)
     parser.add_argument("--synthetic-tier-filter", nargs="+", default=("high_confidence", "probable"))
@@ -119,32 +174,68 @@ def _split_examples(examples: list[RerankTrainingExample], fraction: float, seed
     return train, valid
 
 
-def build_checkpoint_output(args: argparse.Namespace, summary: dict) -> Path:
+def build_run_output(args: argparse.Namespace) -> Path:
     if args.output is not None:
         return args.output
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    public_accuracy = float(summary.get("best_public_accuracy") or 0.0)
     return (
         CHECKPOINT_ROOT
         / (
             "0.6Blora"
             f"_{timestamp}"
-            f"_pubacc{public_accuracy:.3f}"
             f"_ep{args.epochs}"
             f"_lr{args.learning_rate:g}"
         )
     )
 
 
-def _load_peft_model(model_name: str, device: str):
+def build_epoch_output(run_output: Path, epoch: int) -> Path:
+    return run_output.with_name(run_output.name + f"_epoch{epoch}")
+
+
+def build_best_output(run_output: Path, best_public_accuracy: float) -> Path:
+    return run_output.with_name(
+        run_output.name + f"_best_pubacc{best_public_accuracy:.3f}"
+    )
+
+
+def _save_checkpoint(model, tokenizer, output: Path, summary: dict) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    tokenizer.save_pretrained(output)
+    model.save_pretrained(output)
+    (output / "training_summary.json").write_text(
+        json.dumps(summary, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Saved checkpoint to {output}")
+
+
+def _load_peft_model(model_name: str, device: str, *, load_in_4bit: bool = True):
     import torch
-    from peft import LoraConfig, TaskType, get_peft_model
+    from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    model_kwargs: dict = {}
+    if load_in_4bit:
+        if not device.startswith("cuda"):
+            raise RuntimeError(
+                "--load-in-4bit requires a CUDA device. Use --no-load-in-4bit for CPU."
+            )
+        from transformers import BitsAndBytesConfig
+
+        model_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_compute_dtype=torch.float16,
+        )
+        model_kwargs["device_map"] = "auto"
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, **model_kwargs)
+    if load_in_4bit:
+        model = prepare_model_for_kbit_training(model)
     lora_config = LoraConfig(
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
@@ -187,6 +278,8 @@ def train(args: argparse.Namespace) -> None:
 
     if args.epochs is None:
         args.epochs = 1 if args.data_strategy == "public" else 2
+    if args.loss == "listwise" and args.public_top_k == 0:
+        args.public_top_k = 50
 
     if args.data_strategy == "public":
         examples = build_public_training_examples(
@@ -194,6 +287,8 @@ def train(args: argparse.Namespace) -> None:
             args.public_top50,
             args.catalog,
             negatives_per_positive=args.negatives_per_positive,
+            public_top_k=args.public_top_k,
+            public_retrieval_mode=args.public_retrieval_mode,
             negative_pool_csv_path=args.synthetic_products,
             seed=args.seed,
             limit=args.limit,
@@ -207,6 +302,8 @@ def train(args: argparse.Namespace) -> None:
             product_csv_path=args.synthetic_products,
             tiers_path=args.synthetic_tiers,
             negatives_per_positive=args.synthetic_negatives_per_positive,
+            hard_negatives_per_positive=args.synthetic_hard_negatives_per_positive,
+            retrieval_mode=args.synthetic_retrieval_mode,
             seed=args.seed,
             limit=args.limit,
             tier_filter=tuple(args.synthetic_tier_filter),
@@ -224,6 +321,10 @@ def train(args: argparse.Namespace) -> None:
             public_positive_weight=args.public_positive_weight,
             public_negative_weight=args.public_negative_weight,
             synthetic_tier_filter=tuple(args.synthetic_tier_filter),
+            synthetic_hard_negatives_per_positive=args.synthetic_hard_negatives_per_positive,
+            synthetic_retrieval_mode=args.synthetic_retrieval_mode,
+            public_top_k=args.public_top_k,
+            public_retrieval_mode=args.public_retrieval_mode,
             seed=args.seed,
             limit=args.limit,
         )
@@ -236,6 +337,8 @@ def train(args: argparse.Namespace) -> None:
             args.public_top50,
             args.catalog,
             negatives_per_positive=args.negatives_per_positive,
+            public_top_k=args.public_top_k,
+            public_retrieval_mode=args.public_retrieval_mode,
             negative_pool_csv_path=args.synthetic_products,
             seed=args.seed,
             positive_weight=1.0,
@@ -260,9 +363,21 @@ def train(args: argparse.Namespace) -> None:
         return
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer, model, trainable_count = _load_peft_model(args.base_model, device)
+    tokenizer, model, trainable_count = _load_peft_model(
+        args.base_model,
+        device,
+        load_in_4bit=args.load_in_4bit,
+    )
     summary["trainable_parameters"] = trainable_count
+    summary["lora"] = {
+        "r": LORA_R,
+        "lora_alpha": LORA_ALPHA,
+        "lora_dropout": LORA_DROPOUT,
+        "target_modules": list(LORA_TARGET_MODULES),
+        "modules_to_save": ["score"],
+    }
     print(json.dumps({"trainable_parameters": trainable_count, "device": device}))
+    run_output = build_run_output(args)
 
     optimizer = torch.optim.AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
@@ -279,9 +394,11 @@ def train(args: argparse.Namespace) -> None:
         total = 0
         correct = 0
         model.train()
+        epoch_started_at = time.perf_counter()
         steps_in_epoch = (len(train_examples) + args.batch_size - 1) // args.batch_size
         for start in range(0, len(train_examples), args.batch_size):
             step = start // args.batch_size + 1
+            step_started_at = time.perf_counter()
             batch = train_examples[start : start + args.batch_size]
             inputs, labels, weights = _encode_batch(tokenizer, batch, device, args.max_length)
             labels_tensor = torch.tensor(labels, dtype=torch.float32, device=device)
@@ -297,15 +414,29 @@ def train(args: argparse.Namespace) -> None:
             total += len(batch)
             total_loss += float(loss.item()) * len(batch)
             if args.log_interval > 0 and step % args.log_interval == 0:
+                now = time.perf_counter()
+                last_step_seconds = now - step_started_at
+                epoch_elapsed = now - epoch_started_at
+                avg_step_seconds = epoch_elapsed / step
+                remaining_steps = (
+                    (args.epochs - epoch) * steps_in_epoch
+                    + (steps_in_epoch - step)
+                )
+                estimated_total_seconds = (
+                    args.epochs * steps_in_epoch * avg_step_seconds
+                )
                 print(
                     json.dumps(
                         {
                             "epoch": epoch,
-                            "epochs": args.epochs,
                             "step": step,
                             "steps_in_epoch": steps_in_epoch,
                             "step_loss": round(float(loss.item()), 6),
                             "running_accuracy": round(correct / max(1, total), 6),
+                            "last_step_seconds": round(last_step_seconds, 3),
+                            "avg_step_seconds": round(avg_step_seconds, 3),
+                            "eta_seconds": round(remaining_steps * avg_step_seconds, 1),
+                            "estimated_total_seconds": round(estimated_total_seconds, 1),
                         }
                     ),
                     flush=True,
@@ -317,7 +448,7 @@ def train(args: argparse.Namespace) -> None:
         public_accuracy = evaluate(
             tokenizer, model, public_validation_examples, device, args.max_length, args.batch_size
         )
-        if public_validation_examples and public_accuracy >= best_public_accuracy:
+        if public_validation_examples and public_accuracy > best_public_accuracy:
             best_public_accuracy = public_accuracy
             best_state_dict = {
                 name: tensor.detach().cpu().clone()
@@ -328,37 +459,37 @@ def train(args: argparse.Namespace) -> None:
             json.dumps(
                 {
                     "epoch": epoch,
-                    "epochs": args.epochs,
                     "train_loss": round(total_loss / max(1, total), 6),
                     "train_accuracy": round(train_accuracy, 6),
                     "valid_accuracy": round(valid_accuracy, 6),
                     "public_accuracy": round(public_accuracy, 6),
+                    "epoch_seconds": round(time.perf_counter() - epoch_started_at, 1),
                 }
             ),
             flush=True,
         )
+        if args.save_every_epoch:
+            epoch_summary = dict(summary)
+            epoch_summary["best_public_accuracy"] = round(best_public_accuracy, 6)
+            epoch_summary["selected_epoch"] = selected_epoch
+            _save_checkpoint(
+                model,
+                tokenizer,
+                build_epoch_output(run_output, epoch),
+                epoch_summary,
+            )
 
     if best_state_dict is not None:
         model.load_state_dict(best_state_dict)
     summary["best_public_accuracy"] = round(best_public_accuracy, 6)
     summary["selected_epoch"] = selected_epoch
 
-    output = build_checkpoint_output(args, summary)
-    output.mkdir(parents=True, exist_ok=True)
-    tokenizer.save_pretrained(output)
-    model.save_pretrained(output)
-    summary["lora"] = {
-        "r": LORA_R,
-        "lora_alpha": LORA_ALPHA,
-        "lora_dropout": LORA_DROPOUT,
-        "target_modules": list(LORA_TARGET_MODULES),
-        "modules_to_save": ["score"],
-    }
-    (output / "training_summary.json").write_text(
-        json.dumps(summary, indent=2) + "\n",
-        encoding="utf-8",
+    _save_checkpoint(
+        model,
+        tokenizer,
+        build_best_output(run_output, best_public_accuracy),
+        summary,
     )
-    print(f"Saved checkpoint to {output}")
 
 
 def evaluate(tokenizer, model, examples, device, max_length, batch_size) -> float:

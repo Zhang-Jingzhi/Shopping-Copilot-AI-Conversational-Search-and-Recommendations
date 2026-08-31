@@ -82,7 +82,7 @@ and small-model ranking noise.
 From the repository root:
 
 ```powershell
-python -m pip install torch transformers peft
+python -m pip install torch transformers peft bitsandbytes accelerate
 python -m unittest discover -s ranking_pipeline/tests -t . -v
 ```
 
@@ -117,10 +117,17 @@ python -m ranking_pipeline.train_reranker `
   --epochs 2 `
   --batch-size 4 `
   --negatives-per-positive 4 `
-  --synthetic-negatives-per-positive 4 `
+  --synthetic-negatives-per-positive 8 `
+  --synthetic-hard-negatives-per-positive 4 `
+  --synthetic-retrieval-mode lite `
   --max-length 512 `
-  --output ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping-lora
+  --log-interval 50
 ```
+
+The base model loads with 4-bit quantization by default. Use
+`--no-load-in-4bit` for full precision, and use `--log-interval 50` (default)
+for step-level progress. Synthetic negatives first take hard examples from the
+retrieval Top-K and then fill the remaining slots from the same leaf category.
 
 `Qwen3Reranker.load` detects a local `adapter_config.json`, loads the base model
 from the recorded `base_model_name_or_path`, then attaches the adapter with

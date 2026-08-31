@@ -1,0 +1,22 @@
+{
+  "source_checkpoint": "ranking_pipeline\\checkpoints\\qwen3-reranker-0.6B-shopping",
+  "base_model": "tomaarsen/Qwen3-Reranker-0.6B-seq-cls",
+  "lora": {
+    "r": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "modules_to_save": [
+      "score"
+    ]
+  },
+  "adapter_bytes": 20240672
+}

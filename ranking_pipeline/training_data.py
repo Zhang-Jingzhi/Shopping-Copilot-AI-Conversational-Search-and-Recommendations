@@ -120,6 +120,7 @@ class RerankTrainingExample:
     document: str
     label: float
     parent_asin: str
+    group_id: str = ""
     weight: float = 1.0
     source: str = "public"
     tier: str = "public"
@@ -304,6 +305,8 @@ def build_public_training_examples(
     catalog_path: str | Path,
     *,
     negatives_per_positive: int = 4,
+    public_top_k: int = 0,
+    public_retrieval_mode: str = "lite",
     negative_pool_csv_path: str | Path | None = None,
     seed: int = 0,
     limit: int | None = None,
@@ -329,6 +332,16 @@ def build_public_training_examples(
         if negative_pool_csv_path is not None
         else None
     )
+    candidate_generator = None
+    if public_top_k > 0:
+        if public_retrieval_mode == "exact":
+            from techjam_agent.retrieval import ExactDenseTop50CandidateGenerator
+
+            candidate_generator = ExactDenseTop50CandidateGenerator(catalog_path)
+        else:
+            from techjam_agent.retrieval import LiteTop50CandidateGenerator
+
+            candidate_generator = LiteTop50CandidateGenerator(catalog_path)
     rng = random.Random(seed)
     examples: list[RerankTrainingExample] = []
     for sample in samples:
@@ -337,9 +350,22 @@ def build_public_training_examples(
         target_product = catalog.get(target)
         if target_product is None:
             continue
-        candidates = top50.get(sample_id, [])
-        if target in candidates:
+        requirements = requirements_from_product(target_product)
+        if candidate_generator is not None:
+            candidate_set = candidate_generator.generate(
+                requirements,
+                session_id=sample_id,
+                turn=3,
+            )
+            candidates = [
+                candidate.parent_asin for candidate in candidate_set.candidates
+            ]
+        else:
+            candidates = top50.get(sample_id, [])
+        if candidates:
             negatives = [item for item in candidates if item != target]
+            if candidate_generator is not None:
+                negatives = negatives[:public_top_k]
         else:
             negatives = _sample_negative_candidates(
                 target,
@@ -349,20 +375,22 @@ def build_public_training_examples(
                 rng,
                 negatives_per_positive,
             )
-        query = query_text(requirements_from_product(target_product))
+        query = query_text(requirements)
         examples.append(
             RerankTrainingExample(
                 query=query,
                 document=product_text(_candidate_product(target, target_product)),
                 label=1.0,
                 parent_asin=target,
+                group_id=sample_id,
                 weight=positive_weight,
                 source="public",
                 tier="public",
             )
         )
         rng.shuffle(negatives)
-        for negative_id in negatives[:negatives_per_positive]:
+        max_negatives = max(negatives_per_positive, public_top_k) if public_top_k else negatives_per_positive
+        for negative_id in negatives[:max_negatives]:
             negative_product = catalog.get(negative_id)
             if negative_product is None:
                 continue
@@ -372,6 +400,7 @@ def build_public_training_examples(
                     document=product_text(_candidate_product(negative_id, negative_product)),
                     label=0.0,
                     parent_asin=negative_id,
+                    group_id=sample_id,
                     weight=negative_weight,
                     source="public",
                     tier="public",
@@ -389,6 +418,8 @@ def build_synthetic_training_examples(
     product_csv_path: str | Path | None = None,
     tiers_path: str | Path | None = None,
     negatives_per_positive: int = 4,
+    hard_negatives_per_positive: int = 0,
+    retrieval_mode: str = "lite",
     seed: int = 0,
     limit: int | None = None,
     tier_filter: Sequence[str] = ("high_confidence", "probable"),
@@ -398,10 +429,11 @@ def build_synthetic_training_examples(
 ) -> list[RerankTrainingExample]:
     """Build synthetic proxy examples without depending on old Top50 files.
 
-    The target product is positive. Negatives are sampled from the weak
-    supervision CSV's same leaf-category pool, which approximates the
-    distribution a lightweight retrieval stage would produce while remaining
-    reproducible and offline.
+    The target product is positive. When ``hard_negatives_per_positive`` is
+    greater than zero, the first negatives are taken from the retrieval stage's
+    Top-K output, which provides harder, retrieval-confusable examples. The
+    remaining negatives are filled from the weak-supervision CSV's same
+    leaf-category pool.
     """
 
     samples = load_jsonl(synthetic_set_path)
@@ -416,6 +448,17 @@ def build_synthetic_training_examples(
     excluded_targets = set(exclude_target_ids)
     rng = random.Random(seed)
     examples: list[RerankTrainingExample] = []
+    candidate_generator = None
+    if hard_negatives_per_positive > 0:
+        if retrieval_mode == "exact":
+            from techjam_agent.retrieval import ExactDenseTop50CandidateGenerator
+
+            candidate_generator = ExactDenseTop50CandidateGenerator(catalog_path)
+        else:
+            from techjam_agent.retrieval import LiteTop50CandidateGenerator
+
+            candidate_generator = LiteTop50CandidateGenerator(catalog_path)
+    total_negatives = max(negatives_per_positive, hard_negatives_per_positive)
 
     by_category: dict[str, list[str]] = {}
     for parent_asin, metadata in product_pool.items():
@@ -438,33 +481,62 @@ def build_synthetic_training_examples(
             if positive_weight is None and tier is not None
             else (positive_weight if positive_weight is not None else 1.0)
         )
-        query = query_text(requirements_from_product(target_product))
+        requirements = requirements_from_product(target_product)
+        query = query_text(requirements)
         examples.append(
             RerankTrainingExample(
                 query=query,
                 document=product_text(_candidate_product(target, target_product)),
                 label=1.0,
                 parent_asin=target,
+                group_id=sample_id,
                 weight=target_weight,
                 source="synthetic",
                 tier=tier or "unknown",
             )
         )
 
+        hard_negatives: list[str] = []
+        if candidate_generator is not None:
+            try:
+                candidate_set = candidate_generator.generate(
+                    requirements,
+                    session_id=sample_id,
+                    turn=3,
+                )
+                hard_negatives = [
+                    candidate.parent_asin
+                    for candidate in candidate_set.candidates
+                    if candidate.parent_asin != target
+                ]
+            except Exception:
+                hard_negatives = []
+
+        negatives = [
+            parent_asin
+            for parent_asin in hard_negatives
+            if parent_asin != target
+            and parent_asin not in excluded_targets
+            and parent_asin in catalog
+        ][:hard_negatives_per_positive]
+
         target_metadata = product_pool.get(target, {})
         category = target_metadata.get("leaf_category") or "unknown"
         same_category = [item for item in by_category.get(category, []) if item != target]
+        same_category = [item for item in same_category if item not in set(negatives)]
         same_category_weights = [
             _product_negative_weight(product_pool.get(item, {}))
             for item in same_category
         ]
-        negatives = _weighted_sample_ids(
-            same_category,
-            same_category_weights,
-            negatives_per_positive,
-            rng,
+        negatives.extend(
+            _weighted_sample_ids(
+                same_category,
+                same_category_weights,
+                total_negatives - len(negatives),
+                rng,
+            )
         )
-        if len(negatives) < negatives_per_positive and product_pool:
+        if len(negatives) < total_negatives and product_pool:
             other = [item for item in product_pool if item != target]
             other = [item for item in other if item not in set(negatives)]
             other_weights = [
@@ -475,11 +547,11 @@ def build_synthetic_training_examples(
                 _weighted_sample_ids(
                     other,
                     other_weights,
-                    negatives_per_positive - len(negatives),
+                    total_negatives - len(negatives),
                     rng,
                 )
             )
-        for negative_id in negatives[:negatives_per_positive]:
+        for negative_id in negatives[:total_negatives]:
             negative_product = catalog.get(negative_id)
             if negative_product is None:
                 continue
@@ -489,6 +561,7 @@ def build_synthetic_training_examples(
                     document=product_text(_candidate_product(negative_id, negative_product)),
                     label=0.0,
                     parent_asin=negative_id,
+                    group_id=sample_id,
                     weight=negative_weight,
                     source="synthetic",
                     tier=tier or "unknown",
