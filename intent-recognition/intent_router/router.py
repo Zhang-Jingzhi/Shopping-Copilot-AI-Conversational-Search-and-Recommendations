@@ -105,23 +105,12 @@ class IntentRouter:
         intent_type, confidence, evidence = self._classify_intent(normalized, slots)
         hard, soft = self._split_constraints(normalized, slots, intent_type)
         filters = self._filter_constraints(hard)
-        if intent_type == "buying":
-            route = "filter_track"
-            route_reason = "confirmed_buying"
-        elif intent_type == "browsing":
-            route = "semantic_track"
-            route_reason = "confirmed_browsing"
-        else:
-            route = "semantic_track"
-            route_reason = "uncertain_fallback"
         flags = self._ambiguity_flags(slots, confidence, intent_type)
         return IntentResult(
             raw_query=query,
             normalized_query=normalized,
             intent_type=intent_type,
             intent_confidence=confidence,
-            route=route,
-            route_reason=route_reason,
             slots=dict(slots),
             hard_constraints=hard,
             filter_constraints=filters,

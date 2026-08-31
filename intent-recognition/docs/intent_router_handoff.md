@@ -1,6 +1,6 @@
 # Intent Router 交接清单
 
-**交付方：** ① Intent Router & Query Understanding  
+**交付方：** ① Intent Understanding  
 **交接对象：** ② Hybrid Retrieval、③ State & Memory、⑤ Integration  
 **状态：** 模块代码、接口文档、单元测试与公开 session 模拟评测均已完成。
 
@@ -41,8 +41,6 @@ intent = self.router.understand(user_message)
 
 | 字段 | 使用约定 |
 | --- | --- |
-| `route` | 每轮都有值：`filter_track` 或 `semantic_track`。 |
-| `route_reason` | `confirmed_buying`、`confirmed_browsing`、`uncertain_fallback`。 |
 | `filter_constraints` | 仅用于 metadata filter。当前仅允许 `budget_min`、`budget_max`、`brand`、`category`。`brand` 对应 catalog `store`。 |
 | `hard_constraints` | 用户明确约束，但 material/color/size/feature 未必有结构化列；以文本或语义检索处理。 |
 | `soft_preferences` | 用于语义召回、融合或 reranking。 |
@@ -60,17 +58,17 @@ intent = self.router.understand(user_message)
 | `override_detected` | 为 `True` 时删除或替换与最新消息冲突的旧 slot。 |
 | `ambiguity_flags` | 供状态与澄清策略参考。 |
 
-③ 不需要重做 Buying/Browsing 分类。Router 的 `route` 是本轮执行路径；③只维护和提供 state。
+③ 不需要重做 Buying/Browsing 分类。② 的四路召回并行运行；Router 只提供用户理解结果，不指定召回路径。
 
-## 路由规则
+## 意图规则
 
-| 当前轮情况 | `intent_type` | `route` |
-| --- | --- | --- |
-| 明确购买承诺，例如 `ready to buy` | `buying` | `filter_track` |
-| 明确探索，例如 `still exploring` | `browsing` | `semantic_track` |
-| 仅增量信息，例如 `under $100`、`maybe white` | `None` | `semantic_track`，`route_reason=uncertain_fallback` |
+| 当前轮情况 | `intent_type` |
+| --- | --- |
+| 明确购买承诺，例如 `ready to buy` | `buying` |
+| 明确探索，例如 `still exploring` | `browsing` |
+| 仅增量信息，例如 `under $100`、`maybe white` | `None` |
 
-`intent_type=None` 不等于不执行；它表示当前消息不足以单独标注 Buying/Browsing，但 Router 仍选择高召回路径，避免过早 hard filter 漏掉目标。
+`intent_type=None` 不等于无输出；它表示当前消息不足以单独标注 Buying/Browsing，但 Router 仍输出 slots、constraints 和 query signals。
 
 ## 官方 API 边界
 

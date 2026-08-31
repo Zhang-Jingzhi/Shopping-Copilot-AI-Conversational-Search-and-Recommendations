@@ -2,7 +2,7 @@
 
 ## 模块边界
 
-本模块只理解当前轮用户消息，不保存 session state，不做商品召回、排序或澄清决策。它输出当前轮明确提及的 slot、约束强度和意图信号；③ State & Memory 负责跨轮合并与 override，② Retrieval 决定如何使用约束，④ Ranking / Clarification 决定是否提问。
+本模块只理解当前轮用户消息，不保存 session state，不做商品召回、召回路径选择、排序或澄清决策。它输出当前轮明确提及的 slot、约束强度和意图信号；③ State & Memory 负责跨轮合并与 override，② Retrieval 决定如何使用约束并并行执行四路召回，④ Ranking / Clarification 决定是否提问。
 
 Router 不会为了信息完整补写用户没有表达的属性。例如 `for hiking` 不会推出 `waterproof`，`for dinner` 不会推出 `black`。
 
@@ -10,7 +10,7 @@ Router 不会为了信息完整补写用户没有表达的属性。例如 `for h
 
 `IntentResult` 是团队内部模块之间的交接对象，不能直接作为官方 Agent 回包。最终 `Agent.respond(...)` 必须按官方 contract 返回 `message`、`ask_attribute` 和最多 10 个有效 `parent_asin` recommendations。
 
-官方固定的是 `ask_attribute`，只允许：`category`、`material`、`color`、`size`、`style`、`brand`、`budget`、`feature`、`use_case`、`other` 或 `null`。内部 `slots` 可以保留额外的工程字段，例如 `budget_max`、`material_exclude`、`route_reason` 和 `decision_evidence`，但 Integration 在提问时必须映射回这组固定枚举。
+官方固定的是 `ask_attribute`，只允许：`category`、`material`、`color`、`size`、`style`、`brand`、`budget`、`feature`、`use_case`、`other` 或 `null`。内部 `slots` 可以保留额外的工程字段，例如 `budget_max`、`material_exclude` 和 `decision_evidence`，但 Integration 在提问时必须映射回这组固定枚举。
 
 ## 初始化与调用
 
@@ -34,8 +34,6 @@ intent = router.understand("I want something for hiking under $100.")
 | `raw_query` / `normalized_query` | `str` | 原消息与规范化消息。 |
 | `intent_type` | `"buying" \| "browsing" \| null` | 当前轮有足够强的购买承诺或探索行为时才赋值。 |
 | `intent_confidence` | `float` | 当前意图决策的可靠程度。 |
-| `route` | `"filter_track" \| "semantic_track"` | 每轮必有值，供 Retrieval 直接执行。 |
-| `route_reason` | `str` | `confirmed_buying`、`confirmed_browsing` 或 `uncertain_fallback`。 |
 | `slots` | `dict` | 用户当前轮明确说出的信息。 |
 | `hard_constraints` | `dict` | 用户明确不可妥协的约束，未必是 metadata filter。 |
 | `filter_constraints` | `dict` | 可映射到真实 catalog 结构字段的安全过滤条件。 |
@@ -51,8 +49,6 @@ intent = router.understand("I want something for hiking under $100.")
 {
     "intent_type": None,
     "intent_confidence": 0.52,
-    "route": "semantic_track",
-    "route_reason": "uncertain_fallback",
     "slots": {"use_case": ["hiking"], "budget_max": 100.0},
     "hard_constraints": {"budget_max": 100.0},
     "filter_constraints": {"budget_max": 100.0},
@@ -61,17 +57,17 @@ intent = router.understand("I want something for hiking under $100.")
 }
 ```
 
-## 意图与路径策略
+## 意图判断策略
 
 这不是“关键词二分类”。预算、品类、slot 数量、`I want` 都只是弱 signal，不能单独将当前轮强制判为 Buying。
 
 | 当前轮信号 | 输出 |
 | --- | --- |
-| `ready to buy`、`buy now`、`place an order` | `buying`，`filter_track`。 |
-| `still exploring`、灵感、开放式穿搭问题 | `browsing`，`semantic_track`。 |
-| `under $100`、`maybe white`、`actually for hiking` | 通常 `intent_type=null`，但执行 `semantic_track`，理由为 `uncertain_fallback`。 |
+| `ready to buy`、`buy now`、`place an order` | `buying`。 |
+| `still exploring`、灵感、开放式穿搭问题 | `browsing`。 |
+| `under $100`、`maybe white`、`actually for hiking` | 通常 `intent_type=null`。 |
 
-未定意图不是失败，而是多轮需求尚未完整的正常状态。Router 仍会输出新增 slot 和明确约束，并选择高召回的 `semantic_track` 防止过早过滤掉目标商品。③ 应合并这些增量 slot，并在 `override_detected=True` 时处理旧值的失效或替换；它不需要重新做路由分类。
+未定意图不是失败，而是多轮需求尚未完整的正常状态。Router 仍会输出新增 slot 和明确约束。③ 应合并这些增量 slot，并在 `override_detected=True` 时处理旧值的失效或替换；② 四路召回并行运行，不需要 Router 指定某一路。
 
 ## Slot、Hard 与 Filter 的区别
 
@@ -95,7 +91,7 @@ intent = router.understand("I want something for hiking under $100.")
 
 ### State & Memory
 
-合并 `slots`、`hard_constraints` 与 `soft_preferences`。当 `intent_type=null` 时，不应把它当作新的 intent 覆盖历史；Router 已给出 `semantic_track` fallback。`override_detected=True` 时，按最新显式值替换旧 slot。
+合并 `slots`、`hard_constraints` 与 `soft_preferences`。当 `intent_type=null` 时，不应把它当作新的 intent 覆盖历史；Router 仍会保留当前轮提取到的理解信号。`override_detected=True` 时，按最新显式值替换旧 slot。
 
 ### Ranking / Clarification
 
