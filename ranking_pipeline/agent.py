@@ -80,7 +80,9 @@ class RankingAgent(BaseAgent):
         reranker_model: str | Path | None = None,
         policy_enabled: bool = False,
         use_state_memory: bool = False,
+        state_memory_config: dict | None = None,
         use_intent_router: bool = False,
+        snapshot_ranking: bool = False,
     ) -> None:
         from techjam_agent.retrieval import (
             ExactDenseTop50CandidateGenerator,
@@ -96,10 +98,14 @@ class RankingAgent(BaseAgent):
 
         if reranker_mode == "local":
             reranker = HybridContextualReranker(
-                llm_ranker=Qwen3Reranker(str(reranker_model) if reranker_model else None)
+                llm_ranker=Qwen3Reranker(str(reranker_model) if reranker_model else None),
+                use_snapshot_signals=snapshot_ranking,
             )
         elif reranker_mode == "hybrid":
-            reranker = HybridContextualReranker(llm_ranker=None)
+            reranker = HybridContextualReranker(
+                llm_ranker=None,
+                use_snapshot_signals=snapshot_ranking,
+            )
         elif reranker_mode == "locked":
             reranker = LockedWeightedRrfTop10Reranker()
         else:
@@ -115,8 +121,9 @@ class RankingAgent(BaseAgent):
         if use_state_memory:
             from state_memory import StateMemoryManager
 
-            self._state_memory = StateMemoryManager()
+            self._state_memory = StateMemoryManager(**(state_memory_config or {}))
         self._intent_router = None
+        self._snapshot_ranking = snapshot_ranking
         if use_intent_router:
             from intent_router import IntentRouter, load_catalog_brands, load_catalog_categories
 
@@ -150,9 +157,10 @@ class RankingAgent(BaseAgent):
             intent_context=self._intent_contexts.get(session_id),
         )
 
-    def _update_external_context(self, session_id: str, user_message: str) -> None:
+    def _update_external_context(self, session_id: str, user_message: str) -> Any:
         """Feed the sibling state/intent modules without changing retrieval code."""
 
+        snapshot = None
         if self._state_memory is not None:
             snapshot = self._state_memory.update(
                 session_id=session_id,
@@ -164,6 +172,27 @@ class RankingAgent(BaseAgent):
             intent_result = self._intent_router.understand(user_message)
             self._intent_results[session_id] = intent_result
             self._intent_contexts[session_id] = intent_to_context(intent_result)
+        return snapshot
+
+    def _pre_retrieval_decision(self, session_id: str, snapshot: Any) -> dict | None:
+        """Return a pre-retrieval clarification when the state memory asks for one."""
+
+        if snapshot is None:
+            return None
+        from state_memory import NextAction
+
+        if getattr(snapshot, "action", None) != NextAction.ASK_CLARIFICATION:
+            return None
+        question = getattr(snapshot, "clarification_question", None)
+        if not question:
+            return None
+        self._record_asked(session_id, "other")
+        return {
+            "message": str(question),
+            "ask_attribute": "other",
+            "recommendations": [],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0},
+        }
 
     def _record_asked(self, session_id: str, attribute: str | None) -> None:
         if attribute is None:
@@ -183,8 +212,15 @@ class RankingAgent(BaseAgent):
         if collector is None:
             raise RuntimeError("reset must be called before respond")
         collector.observe(user_message, turn)
-        self._update_external_context(session_id, user_message)
+        snapshot = self._update_external_context(session_id, user_message)
         self._configure_reranker(session_id, collector)
+        pre_retrieval = (
+            None
+            if self._snapshot_ranking
+            else self._pre_retrieval_decision(session_id, snapshot)
+        )
+        if pre_retrieval is not None:
+            return pre_retrieval
         if turn <= 2:
             self._record_asked(session_id, "other")
             return {

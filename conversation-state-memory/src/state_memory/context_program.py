@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Mapping, Sequence
+
 from .models import ContextSnapshot, Intent, NextAction, Route, SessionState, UserProfile
 
 
@@ -15,6 +17,25 @@ class ContextProgrammer:
         "color": "Which color would you prefer?",
     }
     CLARIFICATION_ORDER = tuple(CLARIFICATION_PROMPTS)
+
+    def __init__(
+        self,
+        *,
+        overload_threshold: int = OVERLOAD_THRESHOLD,
+        require_category: bool = True,
+        min_hard_slots: int = 0,
+        min_missing_key_slots: int = 0,
+        key_slots: Sequence[str] | None = None,
+        clarification_prompts: Mapping[str, str] | None = None,
+    ) -> None:
+        self.overload_threshold = overload_threshold
+        self.require_category = require_category
+        self.min_hard_slots = min_hard_slots
+        self.min_missing_key_slots = min_missing_key_slots
+        self.key_slots = tuple(key_slots) if key_slots is not None else self.CLARIFICATION_ORDER
+        self.clarification_prompts = dict(self.CLARIFICATION_PROMPTS)
+        if clarification_prompts:
+            self.clarification_prompts.update(clarification_prompts)
 
     def build(self, query: str, state: SessionState, profile: UserProfile, debug: dict) -> ContextSnapshot:
         route = Route.BROWSING_DENSE if state.intent == Intent.BROWSING else Route.BUYING_FILTER
@@ -52,13 +73,32 @@ class ContextProgrammer:
         )
 
     def _clarification(self, state: SessionState) -> str | None:
-        overloaded = state.candidate_count is not None and state.candidate_count > self.OVERLOAD_THRESHOLD
-        ambiguous_buying = state.intent in (Intent.UNKNOWN, Intent.BUYING) and "category" not in state.hard_slots
-        if not overloaded and not ambiguous_buying:
+        missing_key_slots = [slot for slot in self.key_slots if slot not in state.hard_slots]
+        overloaded = state.candidate_count is not None and state.candidate_count > self.overload_threshold
+        missing_category = (
+            self.require_category
+            and state.intent in (Intent.UNKNOWN, Intent.BUYING)
+            and "category" not in state.hard_slots
+        )
+        too_few_hard_slots = (
+            self.min_hard_slots > 0 and len(state.hard_slots) < self.min_hard_slots
+        )
+        too_many_missing_key_slots = (
+            self.min_missing_key_slots > 0
+            and len(missing_key_slots) >= self.min_missing_key_slots
+        )
+        if not (
+            overloaded
+            or missing_category
+            or too_few_hard_slots
+            or too_many_missing_key_slots
+        ):
             return None
-        for slot in self.CLARIFICATION_ORDER:
+        for slot in self.key_slots:
             if slot not in state.hard_slots:
-                return self.CLARIFICATION_PROMPTS[slot]
+                prompt = self.clarification_prompts.get(slot)
+                if prompt:
+                    return prompt
         return None
 
     @staticmethod

@@ -1,0 +1,19 @@
+{
+  "task": "mrr-listwise",
+  "data_strategy": "aligned",
+  "loss": "listmle",
+  "group_size": 20,
+  "group_count": 5,
+  "public_group_count": 2,
+  "synthetic_group_count": 3,
+  "public_weight": 5.0,
+  "synthetic_weight": 1.0,
+  "trainable_parameters": 5047296,
+  "base_model": "tomaarsen/Qwen3-Reranker-0.6B-seq-cls",
+  "adapter_checkpoint": "E:\\Code\\Shopping-Copilot-AI-Conversational-Search-and-Recommendations\\ranking_pipeline\\checkpoints\\qwen3-reranker-0.6B-shopping-lora",
+  "learning_rate": 1e-05,
+  "epochs": 1,
+  "locked_reward_scale": 0.25,
+  "best_group_mrr": 0.274265,
+  "selected_epoch": 1
+}

@@ -88,6 +88,34 @@ class StateMemoryManagerTests(unittest.TestCase):
         snapshot = self.update("women size M", {"candidate_count": 1000})
         self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
 
+    def test_config_min_hard_slots_asks_clarification(self):
+        manager = StateMemoryManager(min_hard_slots=2)
+        snapshot = manager.update("s1", "u1", "show me a dress")
+        self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+
+        snapshot = manager.update("s1", "u1", "blue")
+        self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+
+    def test_config_min_missing_key_slots_asks_high_value_slot(self):
+        manager = StateMemoryManager(min_missing_key_slots=2)
+        snapshot = manager.update("s1", "u1", "show me a blue dress")
+        self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+        self.assertIn("occasion", snapshot.clarification_question)
+
+    def test_config_require_category_can_be_disabled(self):
+        manager = StateMemoryManager(require_category=False)
+        snapshot = manager.update("s1", "u1", "show me something nice")
+        self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+
+    def test_config_custom_key_slots_change_question_order(self):
+        manager = StateMemoryManager(
+            key_slots=("color", "size"),
+            min_missing_key_slots=1,
+        )
+        snapshot = manager.update("s1", "u1", "show me a dress")
+        self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+        self.assertIn("color", snapshot.clarification_question)
+
 
 if __name__ == "__main__":
     unittest.main()

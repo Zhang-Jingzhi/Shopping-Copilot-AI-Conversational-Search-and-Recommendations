@@ -98,6 +98,21 @@ def _candidate_tokens(candidate: Candidate) -> set[str]:
     return set(tokenize(text))
 
 
+def _snapshot_must_not_terms(snapshot: Any) -> set[str]:
+    """Collect hard-negative tokens from a state-memory ContextSnapshot."""
+
+    must_not = getattr(snapshot, "must_not_match", None) or {}
+    terms: set[str] = set()
+    for values in must_not.values():
+        if isinstance(values, Mapping):
+            values = values.keys()
+        elif isinstance(values, (str, int, float)):
+            values = [values]
+        for value in values:
+            terms.update(tokenize(str(value)))
+    return terms
+
+
 def evaluate_hard_constraints(
     candidate: Candidate,
     requirements: Requirements,
@@ -339,6 +354,9 @@ class HybridContextualReranker:
         profile_weight: float = 0.05,
         pointwise_weight: float = 0.35,
         hard_constraint_penalty: float = 0.20,
+        use_snapshot_signals: bool = False,
+        must_not_penalty: float = 0.25,
+        override_hard_penalty_multiplier: float = 2.0,
     ) -> None:
         try:
             pointwise_weight = float(os.environ["TECHJAM_POINTWISE_WEIGHT"])
@@ -354,12 +372,16 @@ class HybridContextualReranker:
         self.profile_weight = profile_weight
         self.pointwise_weight = pointwise_weight
         self.hard_constraint_penalty = hard_constraint_penalty
+        self.use_snapshot_signals = use_snapshot_signals
+        self.must_not_penalty = must_not_penalty
+        self.override_hard_penalty_multiplier = override_hard_penalty_multiplier
         self.fallback = LockedWeightedRrfTop10Reranker()
         self._profiles: dict[str, Mapping[str, Any]] = {}
         self._short_term: dict[str, ShortTermSummary] = {}
         self._asked_attributes: dict[str, tuple[str, ...]] = {}
         self._context_snapshots: dict[str, Any] = {}
         self._intent_contexts: dict[str, Mapping[str, Any]] = {}
+        self._must_not_terms: dict[str, set[str]] = {}
         self.last_preselected_ids: tuple[str, ...] = ()
         self.last_model_result: LLMRankResult | None = None
         self.last_conflicts: tuple[ConstraintConflict, ...] = ()
@@ -381,12 +403,19 @@ class HybridContextualReranker:
         context_snapshot: Any | None = None,
         intent_context: Mapping[str, Any] | None = None,
     ) -> None:
-        self._profiles[session_id] = merge_profile_with_snapshot(
-            user_profile,
-            context_snapshot,
-        )
+        if self.use_snapshot_signals:
+            self._profiles[session_id] = dict(user_profile or {})
+        else:
+            self._profiles[session_id] = merge_profile_with_snapshot(
+                user_profile,
+                context_snapshot,
+            )
         self._context_snapshots[session_id] = context_snapshot
         self._intent_contexts[session_id] = dict(intent_context or {})
+        if self.use_snapshot_signals and context_snapshot is not None:
+            self._must_not_terms[session_id] = _snapshot_must_not_terms(context_snapshot)
+        else:
+            self._must_not_terms.pop(session_id, None)
         if short_term is not None:
             self._short_term[session_id] = short_term
         elif requirements is not None:
@@ -468,11 +497,28 @@ class HybridContextualReranker:
             candidate_set.requirements.soft_preferences,
         )
         hard_term_count = max(1, len(plan.hard_terms))
+        override_multiplier = 1.0
+        if self.use_snapshot_signals:
+            short_term = self._short_term.get(candidate_set.session_id)
+            if (
+                short_term is not None
+                and short_term.override_turns
+                and candidate_set.turn >= short_term.override_turns[0]
+            ):
+                override_multiplier = self.override_hard_penalty_multiplier
         hard_penalty_by_id = {
             parent_asin: self.hard_constraint_penalty
+            * override_multiplier
             * (len(missing_by_id[parent_asin]) / hard_term_count)
             for parent_asin in preselected_ids
         }
+        must_not_penalty_by_id: dict[str, float] = {}
+        must_not_terms = self._must_not_terms.get(candidate_set.session_id, set())
+        if self.use_snapshot_signals and must_not_terms:
+            for parent_asin in preselected_ids:
+                hits = len(must_not_terms & _candidate_tokens(candidate_by_id[parent_asin]))
+                if hits:
+                    must_not_penalty_by_id[parent_asin] = self.must_not_penalty * hits
 
         preselected_ids = tuple(
             sorted(
@@ -480,7 +526,8 @@ class HybridContextualReranker:
                 key=lambda parent_asin: (
                     -(fallback_scores.get(parent_asin, 0.0)
                       + profile_boosts.get(parent_asin, 0.0)
-                      - hard_penalty_by_id[parent_asin]),
+                      - hard_penalty_by_id[parent_asin]
+                      - must_not_penalty_by_id.get(parent_asin, 0.0)),
                     parent_asin,
                 ),
             )
@@ -552,6 +599,7 @@ class HybridContextualReranker:
                     fallback_norm[parent_asin]
                     + self.pointwise_weight * pointwise_scores.get(parent_asin, 0.0)
                     - hard_penalty_by_id[parent_asin]
+                    - must_not_penalty_by_id.get(parent_asin, 0.0)
                 )
                 for parent_asin in prompt_candidate_ids
             }
@@ -593,6 +641,7 @@ class HybridContextualReranker:
                 ranked_ids,
                 key=lambda parent_asin: (
                     int(len(missing_by_id.get(parent_asin, ())) > 0),
+                    int(must_not_penalty_by_id.get(parent_asin, 0.0) > 0),
                     original_positions[parent_asin],
                 ),
             )

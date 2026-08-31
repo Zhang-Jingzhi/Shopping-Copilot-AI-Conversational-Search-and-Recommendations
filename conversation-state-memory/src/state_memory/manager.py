@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Mapping, Sequence
+
 from .context_program import ContextProgrammer
 from .extractor import RuleBasedExtractor
 from .models import ContextSnapshot, SessionState, UserProfile
@@ -10,13 +12,30 @@ from .state_machine import DynamicStateMachine
 class StateMemoryManager:
     """In-memory state manager; persist sessions/profiles outside this class if needed."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        context_programmer: ContextProgrammer | None = None,
+        overload_threshold: int = ContextProgrammer.OVERLOAD_THRESHOLD,
+        require_category: bool = True,
+        min_hard_slots: int = 0,
+        min_missing_key_slots: int = 0,
+        key_slots: Sequence[str] | None = None,
+        clarification_prompts: Mapping[str, str] | None = None,
+    ) -> None:
         self.sessions: dict[str, SessionState] = {}
         self.profiles: dict[str, UserProfile] = {}
         self.extractor = RuleBasedExtractor()
         self.state_machine = DynamicStateMachine()
         self.profile_distiller = ProfileDistiller()
-        self.context_programmer = ContextProgrammer()
+        self.context_programmer = context_programmer or ContextProgrammer(
+            overload_threshold=overload_threshold,
+            require_category=require_category,
+            min_hard_slots=min_hard_slots,
+            min_missing_key_slots=min_missing_key_slots,
+            key_slots=key_slots,
+            clarification_prompts=clarification_prompts,
+        )
 
     def update(
         self,
