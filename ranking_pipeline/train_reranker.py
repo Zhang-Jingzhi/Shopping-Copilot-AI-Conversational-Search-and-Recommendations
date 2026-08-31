@@ -74,6 +74,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--synthetic-products", type=Path, default=DEFAULT_SYNTHETIC_PRODUCTS)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--base-model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--adapter-checkpoint",
+        type=Path,
+        default=None,
+        help="Optional saved PEFT/LoRA checkpoint to continue training from.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -382,9 +388,21 @@ def _run_listwise_training(
     )
 
 
-def _load_peft_model(model_name: str, device: str, *, load_in_4bit: bool = True):
+def _load_peft_model(
+    model_name: str,
+    device: str,
+    *,
+    load_in_4bit: bool = True,
+    adapter_checkpoint: Path | None = None,
+):
     import torch
-    from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+    from peft import (
+        LoraConfig,
+        PeftModel,
+        TaskType,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
@@ -417,7 +435,19 @@ def _load_peft_model(model_name: str, device: str, *, load_in_4bit: bool = True)
         target_modules=list(LORA_TARGET_MODULES),
         modules_to_save=["score"],
     )
-    model = get_peft_model(model, lora_config)
+    if adapter_checkpoint is not None:
+        adapter_checkpoint = Path(adapter_checkpoint)
+        if not adapter_checkpoint.is_dir():
+            raise ValueError(
+                f"--adapter-checkpoint must be a directory: {adapter_checkpoint}"
+            )
+        model = PeftModel.from_pretrained(
+            model,
+            str(adapter_checkpoint),
+            is_trainable=True,
+        )
+    else:
+        model = get_peft_model(model, lora_config)
     model.to(device)
     trainable_count = sum(
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad
@@ -540,8 +570,10 @@ def train(args: argparse.Namespace) -> None:
         args.base_model,
         device,
         load_in_4bit=args.load_in_4bit,
+        adapter_checkpoint=args.adapter_checkpoint,
     )
     summary["trainable_parameters"] = trainable_count
+    summary["adapter_checkpoint"] = str(args.adapter_checkpoint)
     summary["lora"] = {
         "r": LORA_R,
         "lora_alpha": LORA_ALPHA,

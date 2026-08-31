@@ -111,6 +111,28 @@ recommended 5-10x band), and each epoch is evaluated on the public set. The
 best public-accuracy checkpoint is restored before saving. A public-only run
 defaults to one epoch; an aligned run defaults to two epochs.
 
+From a fresh PowerShell terminal at the repository root, continue training from
+the existing LoRA checkpoint:
+
+```powershell
+$env:PYTORCH_CUDA_ALLOC_CONF='expandable_segments:False'
+python -m ranking_pipeline.train_reranker `
+  --data-strategy aligned `
+  --epochs 2 `
+  --batch-size 4 `
+  --adapter-checkpoint ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping-lora `
+  --output ranking_pipeline\checkpoints\0.6Blora_aligned_from_shopping_lora `
+  --log-interval 50
+```
+
+`PYTORCH_CUDA_ALLOC_CONF` works around the CUDA allocator error
+`Unrecognized CachingAllocator option: expandable_segments=True`. If you are
+starting from scratch instead of continuing from LoRA, omit
+`--adapter-checkpoint`.
+
+Epoch and best checkpoints are written as siblings of `--output`, not inside
+that directory: `<output>_epochN` and `<output>_best_pubaccX.XXX`.
+
 ```powershell
 python -m ranking_pipeline.train_reranker `
   --data-strategy aligned `
