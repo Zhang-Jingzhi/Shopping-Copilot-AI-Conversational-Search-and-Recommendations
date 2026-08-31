@@ -669,6 +669,17 @@ def _train(args: argparse.Namespace, groups: list[MRRGroup], catalog: Mapping[st
             ),
             flush=True,
         )
+        epoch_output = run_output / f"epoch_{epoch}"
+        epoch_summary = {
+            **summary,
+            "epoch": epoch,
+            "model_group_mrr": round(metrics["mrr"], 6),
+            "model_top1_accuracy": round(metrics["top1_accuracy"], 6),
+            "epoch_seconds": round(time.perf_counter() - epoch_started_at, 1),
+            "saved_reason": "epoch_checkpoint",
+        }
+        _save_checkpoint(model, tokenizer, epoch_output, epoch_summary)
+
         if metrics["mrr"] > best_mrr:
             best_mrr = metrics["mrr"]
             best_state_dict = {
