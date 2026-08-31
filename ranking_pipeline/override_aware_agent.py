@@ -22,7 +22,7 @@ from techjam_agent.agent import Agent as BaseAgent
 from techjam_agent.dialogue import RequirementsCollector as BaseRequirementsCollector
 from techjam_agent.ranking import LockedWeightedRrfTop10Reranker
 
-from ranking_pipeline.context import parse_override_message
+from ranking_pipeline.context import ShortTermSummary, parse_override_message
 
 
 INITIAL_OVERRIDE_RE = re.compile(
@@ -195,6 +195,13 @@ class OverrideAwareRequirementsCollector(BaseRequirementsCollector):
             except ValueError:
                 continue
         return None
+
+    def short_term_summary(self) -> ShortTermSummary:
+        return ShortTermSummary(
+            requirements=self.requirements(),
+            clarification_turns=tuple(str(index) for index in range(self.other_reply_count)),
+            override_turns=tuple(self.override_turns),
+        )
 
     @staticmethod
     def _append_unique(target: list[str], value: str) -> None:

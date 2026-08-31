@@ -24,6 +24,7 @@ from ranking_pipeline.contextual_ranking import (
 from ranking_pipeline.memory_context import (
     intent_to_context,
 )
+from ranking_pipeline.override_aware_agent import OverrideAwareRequirementsCollector
 from ranking_pipeline.qwen_reranker import Qwen3Reranker
 
 
@@ -125,7 +126,7 @@ class RankingAgent(BaseAgent):
             )
 
     def reset(self, session_id: str, user_profile: dict) -> None:
-        collector = ContextualRequirementsCollector(user_profile=user_profile)
+        collector = OverrideAwareRequirementsCollector(user_profile=user_profile)
         self._sessions[session_id] = collector
         self._asked_attributes[session_id] = []
         self._memory_snapshots.pop(session_id, None)
