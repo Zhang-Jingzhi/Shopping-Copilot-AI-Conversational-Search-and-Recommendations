@@ -45,7 +45,7 @@ DEFAULT_SYNTHETIC_TIERS = (
     REPOSITORY_ROOT / "synthetic-data-3021" / "data" / "synthetic_contract_matched_all_3021_tiers.jsonl"
 )
 DEFAULT_BASE_MODEL = "tomaarsen/Qwen3-Reranker-0.6B-seq-cls"
-DEFAULT_ADAPTER = CHECKPOINT_ROOT / "qwen3-reranker-0.6B-shopping-lora"
+DEFAULT_ADAPTER = CHECKPOINT_ROOT / "0.6Blora_aligned_from_shopping_lora_epoch1"
 
 LORA_R = 8
 LORA_ALPHA = 16
@@ -751,7 +751,7 @@ def main() -> None:
         raise SystemExit(
             "Refusing to continue from a public-200-only MRR checkpoint. "
             "Use --adapter-checkpoint with a clean adapter such as "
-            "ranking_pipeline/checkpoints/qwen3-reranker-0.6B-shopping-lora."
+            "ranking_pipeline/checkpoints/0.6Blora_aligned_from_shopping_lora_epoch1."
         )
     if args.cache_groups is not None and args.cache_groups.is_file():
         cached = json.loads(args.cache_groups.read_text(encoding="utf-8"))
