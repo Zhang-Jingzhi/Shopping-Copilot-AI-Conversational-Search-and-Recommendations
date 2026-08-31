@@ -30,8 +30,10 @@ the local non-dense smoke path.
 
 ## Key Findings
 
-- `locked-exact` is currently the strongest submission configuration:
-  Hit@10 `0.970`, MRR `0.870548`, MTTC `3.325`, Technical `0.899664`.
+- `locked-exact-override-main.json` is the current main-path configuration:
+  Hit@10 `0.985`, MRR `0.884625`, MTTC `3.205`, Technical `0.913788`.
+  The override-aware collector adds `0.014124` Technical over the old
+  `locked-exact.json` (`0.899664`).
 - `local-exact` preserves or improves Hit@10 (`0.975`) but lowers MRR
   (`0.786365`) compared with locked.
 - Enabling the clarification policy sharply increases MTTC to `9.955`;
@@ -55,12 +57,16 @@ diagnostic only and is not an official ranking score.
 
 | file | n | Hit@10 | MRR | MTTC | Efficiency | Technical | notes |
 |---|---:|---:|---:|---:|---:|---:|---|
+| locked-exact-override-main.json | 200 | 0.985000 | 0.884625 | 3.205000 | 0.779500 | 0.913788 | override_hit=0.966667 |
+| override-aware-exact.json | 200 | 0.985000 | 0.884625 | 3.205000 | 0.779500 | 0.913788 | override_hit=0.966667 |
 | local-fusion.json | 200 | 0.975000 | 0.878429 | 3.320000 | 0.768000 | 0.904629 | override_hit=0.866667 |
+| locked-exact-hardcheck.json | 200 | 0.970000 | 0.870548 | 3.325000 | 0.767500 | 0.899664 | override_hit=0.866667 |
 | locked-exact-verify.json | 200 | 0.970000 | 0.870548 | 3.325000 | 0.767500 | 0.899664 | override_hit=0.866667 |
 | locked-exact.json | 200 | 0.970000 | 0.870548 | 3.325000 | 0.767500 | 0.899664 | override_hit=0.866667 |
 | locked-final.json | 200 | 0.970000 | 0.870548 | 3.325000 | 0.767500 | 0.899664 | override_hit=0.866667 |
 | locked.json | 200 | 0.970000 | 0.870548 | 3.325000 | 0.767500 | 0.899664 | override_hit=0.866667 |
 | local-final.json | 200 | 0.975000 | 0.790190 | 3.320000 | 0.768000 | 0.878157 | override_hit=0.866667 |
+| local-exact-lora.json | 200 | 0.975000 | 0.786365 | 3.320000 | 0.768000 | 0.877009 | override_hit=0.866667 |
 | local-exact.json | 200 | 0.975000 | 0.786365 | 3.320000 | 0.768000 | 0.877009 | override_hit=0.866667 |
 | local-exact-pw060.json | 200 | 0.975000 | 0.783573 | 3.320000 | 0.768000 | 0.876172 | override_hit=0.866667 |
 | local-exact-pw010.json | 200 | 0.975000 | 0.780073 | 3.320000 | 0.768000 | 0.875122 | override_hit=0.866667 |

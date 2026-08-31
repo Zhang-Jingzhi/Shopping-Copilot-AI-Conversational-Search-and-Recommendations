@@ -15,6 +15,8 @@ This directory implements component 4 and D:
 ```text
 ranking_pipeline/
   context.py            profile compaction and intent-override parsing
+  agent.py              ranking-pipeline agent adapter
+  override_aware_agent.py per-turn override-aware requirements collector
   memory_context.py     intent-router/state-memory adapters
   prompt.py             compact listwise prompt and strict JSON parser
   qwen_reranker.py      Qwen3-Reranker-0.6B pointwise adapter
@@ -22,9 +24,7 @@ ranking_pipeline/
   training_data.py      public/synthetic pair construction
   distribution_alignment.py aligned public+3021 training data
   train_reranker.py     scoring-head training script
-  convert_full_to_lora.py convert old full checkpoint to LoRA adapter
   evaluate_agent.py     official evaluator wrapper
-  analyze_cutoff.py     offline Top20/Top50 recall check
   diagnose_synthetic.py synthetic 3,021 diagnostic summarizer
   summarize_results.py  saved-result comparison table
   checkpoints/          trained scoring head
@@ -171,19 +171,6 @@ python -m ranking_pipeline.train_reranker `
 from the recorded `base_model_name_or_path`, then attaches the adapter with
 `PeftModel.from_pretrained`.
 
-If you still have an old full checkpoint, convert it once:
-
-```powershell
-python -m ranking_pipeline.convert_full_to_lora `
-  --checkpoint ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping `
-  --output ranking_pipeline\checkpoints\qwen3-reranker-0.6B-shopping-lora `
-  --device cpu
-```
-
-The old full backbone was frozen during training, so copying its `score` head
-into a LoRA-wrapped base model reproduces the same effective checkpoint while
-reducing the stored model from about `2.27 GB` to about `20 MB`.
-
 Set `--data-strategy public` for the previous public-200-only run, or
 `--data-strategy synthetic` for a synthetic-only dry run/ablation. The old
 `techjam-precomputed-rankings-200-and-3021` directory is no longer required:
@@ -263,6 +250,24 @@ only exposes the evaluator's required `parent_asin` list.
 - Efficiency: `clamp((11 - MTTC) / 10, 0, 1)`.
 - Technical: `0.50 * Hit@10 + 0.30 * MRR + 0.20 * Efficiency`.
 
+## Intent Override Handling
+
+`ranking_pipeline/agent.py` now defaults to
+`OverrideAwareRequirementsCollector`, which is tested in
+`ranking_pipeline/tests/test_override_aware_agent.py`. Override resolution is
+slot-aware and conservative:
+
+- a same-value replacement promotes the old soft preference to hard,
+- a same-slot replacement removes only the conflicting old slot,
+- an explicit negation removes the negated preference,
+- a generic `ignore my earlier preference` falls back to the last explicitly
+  disclosed soft preference.
+
+On the public 200, this change raises the locked-exact `Technical` score from
+`0.899664` to `0.913788`, an increase of `0.014124`. The `intent_override`
+subset improves from Hit@10 `0.866667` / MRR `0.655595` / MTTC `4.633333` to
+Hit@10 `0.966667` / MRR `0.749444` / MTTC `3.833333`.
+
 ## Clarification Policy Behavior
 
 `RecommendationClarificationPolicy` selects `recommend` or `clarify` from:
@@ -291,8 +296,11 @@ long-term user signal. ``conversation-state-memory`` supplies the short-term
 tags with snapshot ``profile_hints``; current-turn hard constraints still
 override any profile hint.
 
-The official requirements collector remains the retrieval/ranking requirement
-source because it is the contract the evaluator already validates against. The
+The main ranking agent uses
+``OverrideAwareRequirementsCollector``, a subclass of the official requirements
+collector. The official collector therefore remains the retrieval/ranking
+requirement contract; the subclass adds intent-override-aware slot replacement
+without changing the boundary the evaluator validates. The
 optional ``IntentResult`` and ``ContextSnapshot`` are supplemental inputs:
 they provide current-turn route/ambiguity signals, accumulated slots,
 exclusions, session summary, and profile hints. They are passed into
@@ -309,16 +317,16 @@ Formal `exact` dense public-200 results:
 
 | mode | Hit@10 | MRR | MTTC | Technical |
 |---|---:|---:|---:|---:|
-| `local-exact.json` | 0.975 | 0.786365 | 3.32 | 0.877009 |
+| `locked-exact-override-main.json` | 0.985 | 0.884625 | 3.205 | 0.913788 |
 | `locked-exact.json` | 0.970 | 0.870548 | 3.325 | 0.899664 |
+| `local-exact.json` | 0.975 | 0.786365 | 3.32 | 0.877009 |
 | `hybrid-exact.json` | 0.835 | 0.480437 | 4.39 | 0.693831 |
 | `local-exact-policy.json` | 0.850 | 0.503417 | 9.955 | 0.596925 |
 
-The locked exact path remains the strongest overall by MRR and MTTC; local
-pointwise fusion preserves Hit@10 but currently lowers MRR. Enabling the
-clarification policy is not recommended for this public evaluator because it
-increases MTTC sharply. A pointwise-weight sweep (`0.1`, `0.35`, `0.6`) did not
-recover the locked MRR, so the locked exact path is the current recommended
+`locked-exact-override-main.json` is the current main-path result: the
+override-aware collector raises `Technical` by `0.014124`, from `0.899664` to
+`0.913788`. `local-exact` still lowers MRR versus the locked path, so the
+locked exact path with the override-aware collector remains the recommended
 submission configuration.
 
 When CUDA reports `Unrecognized CachingAllocator option`, run exact/local
@@ -343,7 +351,7 @@ From the repository root:
 python -m unittest discover -s ranking_pipeline/tests -t . -v
 ```
 
-The ranking-pipeline suite currently contains 29 tests and does not download
+The ranking-pipeline suite currently contains 34 tests and does not download
 model weights. The original retrieval-and-reranking suite can still be run
 unchanged from that directory with:
 
