@@ -129,6 +129,22 @@ The base model loads with 4-bit quantization by default. Use
 for step-level progress. Synthetic negatives first take hard examples from the
 retrieval Top-K and then fill the remaining slots from the same leaf category.
 
+Listwise mode switches the objective from pointwise BCE to a per-query
+softmax contrastive loss. It defaults to public Top-20 candidates; increase it
+with `--public-top-k 50` when GPU memory allows.
+
+```powershell
+python -m ranking_pipeline.train_reranker `
+  --loss listwise `
+  --data-strategy public `
+  --epochs 1 `
+  --batch-size 1 `
+  --public-top-k 20 `
+  --public-retrieval-mode lite `
+  --max-length 512 `
+  --log-interval 10
+```
+
 `Qwen3Reranker.load` detects a local `adapter_config.json`, loads the base model
 from the recorded `base_model_name_or_path`, then attaches the adapter with
 `PeftModel.from_pretrained`.

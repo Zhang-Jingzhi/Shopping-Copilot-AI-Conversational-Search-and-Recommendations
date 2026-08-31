@@ -16,6 +16,7 @@ import random
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 from ranking_pipeline.qwen_reranker import DEFAULT_MODEL, format_pair
 from ranking_pipeline.training_data import (
@@ -210,6 +211,177 @@ def _save_checkpoint(model, tokenizer, output: Path, summary: dict) -> None:
     print(f"Saved checkpoint to {output}")
 
 
+def group_examples(examples: list[RerankTrainingExample]) -> list[list[RerankTrainingExample]]:
+    groups: dict[str, list[RerankTrainingExample]] = {}
+    order: list[str] = []
+    for example in examples:
+        group_id = example.group_id or f"{example.parent_asin}:{example.query}"
+        if group_id not in groups:
+            groups[group_id] = []
+            order.append(group_id)
+        groups[group_id].append(example)
+    return [groups[group_id] for group_id in order]
+
+
+def _encode_group(tokenizer, group: list[RerankTrainingExample], device: str, max_length: int):
+    texts = [format_pair(example.query, example.document) for example in group]
+    inputs = tokenizer(
+        texts,
+        return_tensors="pt",
+        padding=True,
+        truncation="longest_first",
+        max_length=max_length,
+    )
+    return {name: value.to(device) for name, value in inputs.items()}
+
+
+def _listwise_loss(logits, positive_indices: Sequence[int]):
+    import torch
+
+    log_probs = torch.log_softmax(logits, dim=0)
+    return -log_probs[positive_indices].mean()
+
+
+def _evaluate_groups(tokenizer, model, groups, device, max_length) -> float:
+    import torch
+
+    if not groups:
+        return 0.0
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.inference_mode():
+        for group in groups:
+            positive_indices = [index for index, example in enumerate(group) if example.label > 0.5]
+            if not positive_indices:
+                continue
+            inputs = _encode_group(tokenizer, group, device, max_length)
+            logits = model(**inputs).logits.squeeze(-1)
+            prediction = int(torch.argmax(logits).item())
+            correct += int(prediction in positive_indices)
+            total += 1
+    return correct / max(1, total)
+
+
+def _run_listwise_training(
+    args,
+    summary: dict,
+    model,
+    tokenizer,
+    device: str,
+    train_examples: list[RerankTrainingExample],
+    valid_examples: list[RerankTrainingExample],
+    public_validation_examples: list[RerankTrainingExample],
+    run_output: Path,
+) -> None:
+    import torch
+    from peft import get_peft_model_state_dict, set_peft_model_state_dict
+
+    train_groups = group_examples(train_examples)
+    valid_groups = group_examples(valid_examples)
+    public_groups = group_examples(public_validation_examples)
+    optimizer = torch.optim.AdamW(
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
+        lr=args.learning_rate,
+    )
+    best_public_accuracy = -1.0
+    best_state_dict = None
+    selected_epoch: int | None = None
+
+    for epoch in range(1, args.epochs + 1):
+        random.Random(args.seed + epoch).shuffle(train_groups)
+        model.train()
+        epoch_started_at = time.perf_counter()
+        total_loss = 0.0
+        total = 0
+        correct = 0
+        steps_in_epoch = len(train_groups)
+        for step, group in enumerate(train_groups, start=1):
+            positive_indices = [index for index, example in enumerate(group) if example.label > 0.5]
+            if not positive_indices:
+                continue
+            step_started_at = time.perf_counter()
+            optimizer.zero_grad(set_to_none=True)
+            inputs = _encode_group(tokenizer, group, device, args.max_length)
+            logits = model(**inputs).logits.squeeze(-1)
+            loss = _listwise_loss(logits, positive_indices)
+            group_weight = sum(group[index].weight for index in positive_indices) / len(positive_indices)
+            loss = loss * group_weight
+            loss.backward()
+            optimizer.step()
+            prediction = int(torch.argmax(logits).item())
+            correct += int(prediction in positive_indices)
+            total += 1
+            total_loss += float(loss.item())
+            if args.log_interval > 0 and step % args.log_interval == 0:
+                now = time.perf_counter()
+                avg_step_seconds = (now - epoch_started_at) / step
+                remaining_steps = (args.epochs - epoch) * steps_in_epoch + (steps_in_epoch - step)
+                print(
+                    json.dumps(
+                        {
+                            "loss": "listwise",
+                            "epoch": epoch,
+                            "step": step,
+                            "steps_in_epoch": steps_in_epoch,
+                            "step_loss": round(float(loss.item()), 6),
+                            "running_accuracy": round(correct / max(1, total), 6),
+                            "last_step_seconds": round(now - step_started_at, 3),
+                            "avg_step_seconds": round(avg_step_seconds, 3),
+                            "eta_seconds": round(remaining_steps * avg_step_seconds, 1),
+                        }
+                    ),
+                    flush=True,
+                )
+        train_accuracy = correct / max(1, total)
+        valid_accuracy = _evaluate_groups(tokenizer, model, valid_groups, device, args.max_length)
+        public_accuracy = _evaluate_groups(tokenizer, model, public_groups, device, args.max_length)
+        if public_groups and public_accuracy > best_public_accuracy:
+            best_public_accuracy = public_accuracy
+            best_state_dict = {
+                name: tensor.detach().cpu().clone()
+                for name, tensor in get_peft_model_state_dict(model).items()
+            }
+            selected_epoch = epoch
+        print(
+            json.dumps(
+                {
+                    "loss": "listwise",
+                    "epoch": epoch,
+                    "train_loss": round(total_loss / max(1, total), 6),
+                    "train_accuracy": round(train_accuracy, 6),
+                    "valid_accuracy": round(valid_accuracy, 6),
+                    "public_accuracy": round(public_accuracy, 6),
+                    "epoch_seconds": round(time.perf_counter() - epoch_started_at, 1),
+                }
+            ),
+            flush=True,
+        )
+        if args.save_every_epoch:
+            epoch_summary = dict(summary)
+            epoch_summary["loss"] = "listwise"
+            epoch_summary["best_public_accuracy"] = round(best_public_accuracy, 6)
+            epoch_summary["selected_epoch"] = selected_epoch
+            _save_checkpoint(
+                model,
+                tokenizer,
+                build_epoch_output(run_output, epoch),
+                epoch_summary,
+            )
+
+    if best_state_dict is not None:
+        set_peft_model_state_dict(model, best_state_dict)
+    summary["loss"] = "listwise"
+    summary["best_public_accuracy"] = round(best_public_accuracy, 6)
+    summary["selected_epoch"] = selected_epoch
+    _save_checkpoint(
+        model,
+        tokenizer,
+        build_best_output(run_output, best_public_accuracy),
+        summary,
+    )
+
+
 def _load_peft_model(model_name: str, device: str, *, load_in_4bit: bool = True):
     import torch
     from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
@@ -275,11 +447,12 @@ def _encode_batch(tokenizer, examples: list[RerankTrainingExample], device: str,
 def train(args: argparse.Namespace) -> None:
     import torch
     from torch import nn
+    from peft import get_peft_model_state_dict, set_peft_model_state_dict
 
     if args.epochs is None:
         args.epochs = 1 if args.data_strategy == "public" else 2
     if args.loss == "listwise" and args.public_top_k == 0:
-        args.public_top_k = 50
+        args.public_top_k = 20
 
     if args.data_strategy == "public":
         examples = build_public_training_examples(
@@ -378,6 +551,19 @@ def train(args: argparse.Namespace) -> None:
     }
     print(json.dumps({"trainable_parameters": trainable_count, "device": device}))
     run_output = build_run_output(args)
+    if args.loss == "listwise":
+        _run_listwise_training(
+            args,
+            summary,
+            model,
+            tokenizer,
+            device,
+            train_examples,
+            valid_examples,
+            public_validation_examples,
+            run_output,
+        )
+        return
 
     optimizer = torch.optim.AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
@@ -452,7 +638,7 @@ def train(args: argparse.Namespace) -> None:
             best_public_accuracy = public_accuracy
             best_state_dict = {
                 name: tensor.detach().cpu().clone()
-                for name, tensor in model.state_dict().items()
+                for name, tensor in get_peft_model_state_dict(model).items()
             }
             selected_epoch = epoch
         print(
@@ -480,7 +666,7 @@ def train(args: argparse.Namespace) -> None:
             )
 
     if best_state_dict is not None:
-        model.load_state_dict(best_state_dict)
+        set_peft_model_state_dict(model, best_state_dict)
     summary["best_public_accuracy"] = round(best_public_accuracy, 6)
     summary["selected_epoch"] = selected_epoch
 
