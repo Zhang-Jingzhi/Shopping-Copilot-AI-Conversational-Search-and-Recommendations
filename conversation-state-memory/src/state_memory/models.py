@@ -52,6 +52,9 @@ class SessionState:
     rejected_values: dict[str, list[Any]] = field(default_factory=dict)
     shown_asins: list[str] = field(default_factory=list)
     candidate_count: int | None = None
+    clarification_count: int = 0
+    last_clarification_turn: int | None = None
+    last_clarification_slot: str | None = None
     summary: str = "No shopping requirement captured yet."
     decision_stage: str = "discovery"
 

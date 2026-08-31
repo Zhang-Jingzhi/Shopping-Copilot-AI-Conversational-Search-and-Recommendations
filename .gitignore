@@ -43,6 +43,8 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+!conversation-state-memory/.cache/
+!conversation-state-memory/.cache/catalog_lexicon.json
 nosetests.xml
 coverage.xml
 *.cover

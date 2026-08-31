@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
+from pathlib import Path
+
+from .catalog_lexicon import CatalogLexicon
 from .context_program import ContextProgrammer
 from .extractor import RuleBasedExtractor
 from .models import ContextSnapshot, SessionState, UserProfile
@@ -14,18 +17,18 @@ class StateMemoryManager:
 
     def __init__(
         self,
-        *,
-        context_programmer: ContextProgrammer | None = None,
-        overload_threshold: int = ContextProgrammer.OVERLOAD_THRESHOLD,
-        require_category: bool = True,
-        min_hard_slots: int = 0,
-        min_missing_key_slots: int = 0,
-        key_slots: Sequence[str] | None = None,
-        clarification_prompts: Mapping[str, str] | None = None,
+        catalog_path: str | Path | None = None,
+        catalog_cache_path: str | Path | None = None,
     ) -> None:
         self.sessions: dict[str, SessionState] = {}
         self.profiles: dict[str, UserProfile] = {}
-        self.extractor = RuleBasedExtractor()
+        resolved_catalog = self._resolve_catalog_path(catalog_path)
+        lexicon = (
+            CatalogLexicon.from_jsonl(resolved_catalog, cache_path=catalog_cache_path)
+            if resolved_catalog
+            else None
+        )
+        self.extractor = RuleBasedExtractor(catalog_lexicon=lexicon)
         self.state_machine = DynamicStateMachine()
         self.profile_distiller = ProfileDistiller()
         self.context_programmer = context_programmer or ContextProgrammer(
@@ -36,6 +39,15 @@ class StateMemoryManager:
             key_slots=key_slots,
             clarification_prompts=clarification_prompts,
         )
+
+    @staticmethod
+    def _resolve_catalog_path(catalog_path: str | Path | None) -> Path | None:
+        if catalog_path is not None:
+            candidate = Path(catalog_path)
+            return candidate if candidate.is_file() else None
+        repository_root = Path(__file__).resolve().parents[3]
+        candidate = repository_root / "official_kit" / "data" / "catalog.jsonl"
+        return candidate if candidate.is_file() else None
 
     def update(
         self,

@@ -1,5 +1,7 @@
 import sys
 import unittest
+import json
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -88,33 +90,106 @@ class StateMemoryManagerTests(unittest.TestCase):
         snapshot = self.update("women size M", {"candidate_count": 1000})
         self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
 
-    def test_config_min_hard_slots_asks_clarification(self):
-        manager = StateMemoryManager(min_hard_slots=2)
-        snapshot = manager.update("s1", "u1", "show me a dress")
+    def test_explicitly_clearing_a_constraint_removes_old_slot_and_rejection(self):
+        self.update("I need a black dress under $80")
+        snapshot = self.update("Any color is fine; ignore my earlier budget.")
+        self.assertNotIn("color", snapshot.must_match)
+        self.assertNotIn("price_max", snapshot.must_match)
+        self.assertNotIn("color", snapshot.must_not_match)
+        self.assertIn("color", snapshot.debug["erased_slots"])
+        self.assertIn("price_max", snapshot.debug["erased_slots"])
+
+    def test_replacing_color_does_not_imply_the_old_color_is_rejected(self):
+        self.update("I need a black dress")
+        snapshot = self.update("Actually, blue instead")
+        self.assertEqual(snapshot.must_match["color"], "blue")
+        self.assertNotIn("color", snapshot.must_not_match)
+
+    def test_clarification_is_capped_and_retrieval_is_forced_before_turn_limit(self):
+        snapshot = self.update("show me something", {"candidate_count": 1000})
         self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
-
-        snapshot = manager.update("s1", "u1", "blue")
-        self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
-
-    def test_config_min_missing_key_slots_asks_high_value_slot(self):
-        manager = StateMemoryManager(min_missing_key_slots=2)
-        snapshot = manager.update("s1", "u1", "show me a blue dress")
+        snapshot = self.update("still browsing", {"candidate_count": 1000})
         self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
-        self.assertIn("occasion", snapshot.clarification_question)
-
-    def test_config_require_category_can_be_disabled(self):
-        manager = StateMemoryManager(require_category=False)
-        snapshot = manager.update("s1", "u1", "show me something nice")
-        self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
-
-    def test_config_custom_key_slots_change_question_order(self):
-        manager = StateMemoryManager(
-            key_slots=("color", "size"),
-            min_missing_key_slots=1,
+        snapshot = self.update("show more", {"candidate_count": 1000})
+        self.assertIn(
+            snapshot.action,
+            {NextAction.RETRIEVE_BUYING, NextAction.RETRIEVE_BROWSING},
         )
-        snapshot = manager.update("s1", "u1", "show me a dress")
-        self.assertEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
-        self.assertIn("color", snapshot.clarification_question)
+        self.assertEqual(snapshot.debug["clarification_count"], 2)
+
+        for _ in range(5):
+            snapshot = self.update("still looking", {"candidate_count": 1000})
+        self.assertGreaterEqual(self.manager.sessions["s1"].turn_id, 8)
+        self.assertNotEqual(snapshot.action, NextAction.ASK_CLARIFICATION)
+        self.assertTrue(snapshot.debug["forced_retrieval"])
+
+    def test_catalog_aware_extraction_captures_brand_feature_and_rating(self):
+        snapshot = self.update("I need Columbia waterproof shoes rated 4 stars")
+        self.assertEqual(snapshot.must_match["brand"], "Columbia")
+        self.assertTrue(snapshot.must_match["feature_waterproof"])
+        self.assertEqual(snapshot.must_match["rating_min"], 4.0)
+
+    def test_catalog_aware_extraction_captures_apparel_attributes(self):
+        snapshot = self.update("I need a floral long sleeve relaxed dress")
+        self.assertIn("floral", snapshot.should_match["pattern"])
+        self.assertIn("long sleeve", snapshot.should_match["sleeve"])
+        self.assertIn("relaxed", snapshot.should_match["fit"])
+
+    def test_catalog_details_expand_structured_attribute_vocabulary(self):
+        product = {
+            "parent_asin": "test",
+            "categories": ["Clothing, Shoes & Jewelry", "Women", "Dresses", "Wrap Dresses"],
+            "store": "Example Brand",
+            "title": "Example dress",
+            "features": [],
+            "details": {
+                "Closure Type": "Zipper",
+                "Neck Style": "V Neck",
+                "Product Care Instructions": "Machine Wash",
+                "Sport Type": "Running",
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = Path(directory) / "catalog.jsonl"
+            cache_path = Path(directory) / "cache" / "lexicon.json"
+            catalog_path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            manager = StateMemoryManager(
+                catalog_path=catalog_path,
+                catalog_cache_path=cache_path,
+            )
+            snapshot = manager.update(
+                "catalog-session",
+                "catalog-user",
+                "Show an Example Brand wrap dresses with zipper, v neck, machine wash for running",
+            )
+        self.assertEqual(snapshot.must_match["brand"], "Example Brand")
+        self.assertEqual(snapshot.must_match["closure"], "Zipper")
+        self.assertEqual(snapshot.must_match["neckline"], "V Neck")
+        self.assertIn("Machine Wash", snapshot.should_match["care"])
+        self.assertIn("Running", snapshot.should_match["sport"])
+
+    def test_catalog_lexicon_is_cached_on_disk_and_invalidated_on_change(self):
+        product = {
+            "parent_asin": "test",
+            "categories": ["Clothing", "Jackets"],
+            "store": "Cache Brand",
+            "title": "Test jacket",
+            "features": ["Waterproof"],
+            "details": {"Closure Type": "Zipper"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = Path(directory) / "catalog.jsonl"
+            cache_path = Path(directory) / "cache" / "lexicon.json"
+            catalog_path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            manager = StateMemoryManager(catalog_path=catalog_path, catalog_cache_path=cache_path)
+            self.assertTrue(cache_path.is_file())
+            self.assertEqual(manager.update("cache-1", "user", "Cache Brand zipper jacket").must_match["closure"], "Zipper")
+
+            product["details"] = {"Closure Type": "Buttons"}
+            catalog_path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            refreshed = StateMemoryManager(catalog_path=catalog_path, catalog_cache_path=cache_path)
+            snapshot = refreshed.update("cache-2", "user", "Cache Brand buttons jacket")
+            self.assertEqual(snapshot.must_match["closure"], "Buttons")
 
 
 if __name__ == "__main__":
