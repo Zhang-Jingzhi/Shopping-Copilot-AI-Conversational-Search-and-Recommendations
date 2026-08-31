@@ -1,0 +1,42 @@
+{
+  "data_strategy": "aligned",
+  "positive_examples": 1409,
+  "negative_examples": 10472,
+  "train_examples": 10090,
+  "valid_examples": 1791,
+  "public_validation_examples": 1000,
+  "trainable_parameters": 5047296,
+  "best_public_accuracy": 1.0,
+  "selected_epoch": 1,
+  "distribution": {
+    "total_examples": 11881,
+    "positive_examples": 1409,
+    "negative_examples": 10472,
+    "public_examples": 1000,
+    "synthetic_examples": 10881,
+    "tier_counts": {
+      "high_confidence": 9585,
+      "probable": 1296,
+      "public": 1000
+    },
+    "weighted_positive_ratio": 0.276267
+  },
+  "adapter_checkpoint": "ranking_pipeline\\checkpoints\\qwen3-reranker-0.6B-shopping-lora",
+  "lora": {
+    "r": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ],
+    "modules_to_save": [
+      "score"
+    ]
+  }
+}
