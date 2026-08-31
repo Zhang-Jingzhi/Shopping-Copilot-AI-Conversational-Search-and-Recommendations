@@ -202,11 +202,11 @@ class FusedContextualReranker:
         *,
         top_n: int = 20,
         min_keep: int = 15,
-        profile_weight: float = 0.05,
-        intent_weight: float = 0.10,
-        pointwise_weight: float = 0.35,
-        hard_constraint_penalty: float = 0.20,
-        must_not_penalty: float = 0.25,
+        profile_weight: float = 0.0,
+        intent_weight: float = 0.0,
+        pointwise_weight: float = 0.0,
+        hard_constraint_penalty: float = 0.0,
+        must_not_penalty: float = 0.0,
         override_hard_penalty_multiplier: float = 2.0,
     ) -> None:
         try:
@@ -219,6 +219,10 @@ class FusedContextualReranker:
             pass
         try:
             hard_constraint_penalty = float(os.environ["TECHJAM_HARD_PENALTY"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            must_not_penalty = float(os.environ["TECHJAM_MUST_NOT_PENALTY"])
         except (KeyError, TypeError, ValueError):
             pass
 
@@ -364,6 +368,10 @@ class FusedContextualReranker:
             override_turns=self._override_turns.get(session_id, ()),
         )
         self.last_fused_requirements[session_id] = fused
+        override_active = self._override_active(session_id, candidate_set.turn)
+        if override_active:
+            return self.fallback.rerank(candidate_set, top_k=top_k)
+
 
         kept = tuple(candidates)
         conflicts = ()
@@ -405,7 +413,6 @@ class FusedContextualReranker:
             candidate_set.requirements.soft_preferences,
         )
         hard_term_count = max(1, len(plan.hard_terms))
-        override_active = self._override_active(session_id, candidate_set.turn)
         override_multiplier = (
             self.override_hard_penalty_multiplier
             if override_active
@@ -455,7 +462,7 @@ class FusedContextualReranker:
             else 1.0
         )
         strategy = choose_rerank_strategy(
-            has_model=self.llm_ranker is not None,
+            has_model=(self.llm_ranker is not None and self.pointwise_weight > 0.0),
             turn=candidate_set.turn,
             selected_count=len(preselected_sorted),
             top_k=top_k,
@@ -468,7 +475,7 @@ class FusedContextualReranker:
         ]
 
         pointwise_scores: dict[str, float] = {}
-        if self.llm_ranker is not None and strategy == "hybrid":
+        if self.llm_ranker is not None and self.pointwise_weight > 0.0 and strategy == "hybrid":
             try:
                 pointwise_scores = self.llm_ranker.score_candidates(
                     fused,
@@ -587,8 +594,9 @@ class FusedRankingAgent:
         self.candidate_generator = candidate_generator
         self.reranker = FusedContextualReranker(llm_ranker=llm_ranker)
         self.fuse_retrieval = fuse_retrieval
+        state_memory_cache = Path(__file__).resolve().parent / ".cache" / "fused_state_memory_lexicon.json"
         self._sessions: dict[str, OverrideAwareRequirementsCollector] = {}
-        self._state_memory = StateMemoryManager() if use_state_memory else None
+        self._state_memory = StateMemoryManager(catalog_path=catalog_path, catalog_cache_path=state_memory_cache) if use_state_memory else None
         self._intent_router = (
             IntentRouter(
                 known_brands=load_catalog_brands(catalog_path),
