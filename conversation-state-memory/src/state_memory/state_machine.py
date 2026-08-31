@@ -29,16 +29,6 @@ class DynamicStateMachine:
             state.intent = extraction.intent
             state.intent_confidence = extraction.confidence
 
-        for name in extraction.cleared_slots:
-            slot_names = ("price_min", "price_max") if name == "budget" else (name,)
-            for slot_name in slot_names:
-                for slots in (state.hard_slots, state.soft_slots):
-                    if slot_name in slots:
-                        del slots[slot_name]
-                        delta.erased_slots.append(slot_name)
-                # "Any colour is fine" also withdraws a previous rejection.
-                state.rejected_values.pop(slot_name, None)
-
         for name, values in extraction.rejected.items():
             for value in values:
                 state.rejected_values.setdefault(name, [])
@@ -65,6 +55,10 @@ class DynamicStateMachine:
                 target[extracted.name] = slot
                 delta.added_slots.append(f"{extracted.name}={extracted.value}")
             elif existing.value != extracted.value:
+                if extracted.name == "color":
+                    state.rejected_values.setdefault("color", [])
+                    if existing.value not in state.rejected_values["color"]:
+                        state.rejected_values["color"].append(existing.value)
                 target[extracted.name] = slot
                 delta.updated_slots.append(f"{extracted.name}:{existing.value}->{extracted.value}")
             else:
@@ -75,11 +69,6 @@ class DynamicStateMachine:
 
     def _erase_incompatible_slots(self, state: SessionState, category: str, delta: StateDelta) -> None:
         allowed = COMPATIBLE_SLOTS.get(category, set())
-        # Catalog leaf categories such as "Running Shoes" are not part of the
-        # compact hand-maintained compatibility table.  Preserve accumulated
-        # cross-category constraints instead of erasing everything.
-        if not allowed:
-            return
         for slots in (state.hard_slots, state.soft_slots):
             for name in list(slots):
                 if name not in allowed:

@@ -9,12 +9,11 @@ class IntentRouterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.router = IntentRouter(known_brands=["Nike", "Columbia"])
 
-    def test_buying_query_routes_to_filter_track(self) -> None:
+    def test_buying_query_extracts_filterable_constraints(self) -> None:
         result = self.router.understand(
             "I'm ready to buy shoes under $90; they must be black and Nike only."
         )
         self.assertEqual(result.intent_type, "buying")
-        self.assertEqual(result.route, "filter_track")
         self.assertEqual(result.hard_constraints["budget_max"], 90.0)
         self.assertIn("black", result.hard_constraints["color"])
         self.assertIn("nike", result.hard_constraints["brand"])
@@ -27,7 +26,6 @@ class IntentRouterTest(unittest.TestCase):
             "I'm still exploring ideas for comfortable outfits for a summer wedding."
         )
         self.assertEqual(result.intent_type, "browsing")
-        self.assertEqual(result.route, "semantic_track")
         self.assertIn("wedding", result.soft_preferences["use_case"])
         self.assertIn("comfortable", result.soft_preferences["feature"])
 
@@ -37,8 +35,6 @@ class IntentRouterTest(unittest.TestCase):
         )
         self.assertTrue(result.override_detected)
         self.assertIsNone(result.intent_type)
-        self.assertEqual(result.route, "semantic_track")
-        self.assertEqual(result.route_reason, "uncertain_fallback")
         self.assertIn("wool", result.soft_preferences["material"])
 
     def test_catalog_simulator_buying_message(self) -> None:
@@ -46,8 +42,6 @@ class IntentRouterTest(unittest.TestCase):
             "I'm looking for Shirts T-Shirts. A key requirement is: cotton."
         )
         self.assertIsNone(result.intent_type)
-        self.assertEqual(result.route, "semantic_track")
-        self.assertEqual(result.route_reason, "uncertain_fallback")
         self.assertIn("cotton", result.hard_constraints["material"])
 
     def test_catalog_simulator_browsing_message(self) -> None:
@@ -55,13 +49,11 @@ class IntentRouterTest(unittest.TestCase):
             "I'm looking for Earrings Hoop, but I'm still exploring."
         )
         self.assertEqual(result.intent_type, "browsing")
-        self.assertEqual(result.route, "semantic_track")
         self.assertIn("earrings", result.slots["category"])
 
     def test_budget_target_is_a_soft_preference(self) -> None:
         result = self.router.understand("Show me casual dresses around $60.")
         self.assertIsNone(result.intent_type)
-        self.assertEqual(result.route, "semantic_track")
         self.assertEqual(result.soft_preferences["budget_target"], 60.0)
 
     def test_size_style_and_audience_are_extracted(self) -> None:
@@ -81,7 +73,7 @@ class IntentRouterTest(unittest.TestCase):
         self.assertIn("shoes", result.hard_constraints["category_exclude"])
         self.assertNotIn("material_exclude", result.filter_constraints)
 
-    def test_decision_evidence_explains_browsing_route(self) -> None:
+    def test_decision_evidence_explains_browsing_intent(self) -> None:
         result = self.router.understand("What should I wear? I'm still exploring ideas.")
         self.assertEqual(result.intent_type, "browsing")
         self.assertIn("still_exploring", result.decision_evidence["browsing"])
@@ -98,8 +90,6 @@ class IntentRouterTest(unittest.TestCase):
     def test_constraints_do_not_force_buying_intent(self) -> None:
         result = self.router.understand("I want something for hiking under $100.")
         self.assertIsNone(result.intent_type)
-        self.assertEqual(result.route, "semantic_track")
-        self.assertEqual(result.route_reason, "uncertain_fallback")
         self.assertEqual(result.hard_constraints["budget_max"], 100.0)
         self.assertIn("intent_undetermined", result.ambiguity_flags)
 

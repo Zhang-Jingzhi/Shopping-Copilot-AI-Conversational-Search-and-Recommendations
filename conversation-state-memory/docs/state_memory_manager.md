@@ -92,21 +92,6 @@ ContextSnapshot(
 信息价值依次补充 category、gender、occasion、size、budget、color，从而降低用户
 认知负担并改善 MTTC。当候选为空时，系统保留硬约束，并通知检索层先放松软偏好。
 
-`ContextProgrammer` 的澄清触发规则可按 Top50 场景配置，默认保持兼容行为：
-
-```python
-manager = StateMemoryManager(
-    require_category=True,        # buying/unknown 且缺 category 时先问
-    min_hard_slots=2,             # 硬约束少于该数量时先问（0 表示关闭）
-    min_missing_key_slots=2,      # 关键槽位缺失数达到该值时才问（0 表示关闭）
-    key_slots=("category", "occasion", "price_max", "gender", "size", "color"),
-    overload_threshold=300,       # 候选过载阈值
-)
-```
-
-规则为“或”关系：任一条件满足即触发澄清，并按 `key_slots` 顺序选取第一个缺失
-槽位提问；若所有关键槽位都已存在则不再追问。
-
 ## 公共 API
 
 ```python

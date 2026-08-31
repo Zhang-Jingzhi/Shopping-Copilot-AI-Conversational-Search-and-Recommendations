@@ -2,14 +2,14 @@
 
 **测试日期：** 2026-08-27  
 **模块路径：** `intent_router/`  
-**测试对象：** Intent Detection、Dual-Track Routing、Slot Extraction、Constraint Classification、Query Rewrite、Intent Override
+**测试对象：** Intent Detection、Slot Extraction、Constraint Classification、Query Rewrite、Intent Override
 
 ## 1. 测试目标
 
 验证 Router 能够：
 
-- 在明确购买承诺与明确探索表达之间做双轨路由；
-- 对信息不完整的当前轮输出 `intent_type=null`，但仍输出可执行的 fallback route；
+- 在明确购买承诺与明确探索表达之间做意图区分；
+- 对信息不完整的当前轮输出 `intent_type=null`，但仍输出 slots、constraints 和 query signals；
 - 提取用户明确表达的商品 slot，而不推断未说出的属性；
 - 区分用户硬约束、可安全 metadata filter 的约束和软偏好；
 - 识别 Intent Override；
@@ -31,9 +31,9 @@ python3 -m compileall -q intent_router scripts tests
 
 | 覆盖项 | 验证内容 | 结果 |
 | --- | --- | --- |
-| 明确 Buying | `ready to buy` 触发 `filter_track` | 通过 |
-| 明确 Browsing | `still exploring` 触发 `semantic_track` | 通过 |
-| 不完整意图 | 预算/用途不强制分类，使用 semantic fallback | 通过 |
+| 明确 Buying | `ready to buy` 触发 `buying` | 通过 |
+| 明确 Browsing | `still exploring` 触发 `browsing` | 通过 |
+| 不完整意图 | 预算/用途不强制分类 | 通过 |
 | 预算解析 | 上限、区间、目标预算的 hard/soft 区分 | 通过 |
 | Slot Extraction | category、brand、color、material、size、style、audience、use_case、feature | 通过 |
 | 否定约束 | `not leather`、`no heels` 生成 `*_exclude` | 通过 |
@@ -47,18 +47,18 @@ python3 -m compileall -q intent_router scripts tests
 
 下表中的 query 来自 [`tests/test_intent_router.py`](../tests/test_intent_router.py)。为便于阅读，表中只展示关键字段，不展示完整 `IntentResult`。
 
-| Query | 预期意图与路径 | 关键验证点 |
+| Query | 预期意图 | 关键验证点 |
 | --- | --- | --- |
-| `I'm ready to buy shoes under $90; they must be black and Nike only.` | `buying` / `filter_track` | `budget_max=90`、black/Nike 为 hard；只有 price、brand、category 进入 `filter_constraints`。 |
-| `I'm still exploring ideas for comfortable outfits for a summer wedding.` | `browsing` / `semantic_track` | `comfortable`、`summer`、`wedding` 为语义偏好。 |
-| `I want something for hiking under $100.` | `null` / `semantic_track` | 不把预算和 `I want` 强制判为 Buying；`route_reason=uncertain_fallback`。 |
-| `Show me casual dresses around $60.` | `null` / `semantic_track` | `budget_target=60` 是 soft，不错误地当作 price cap。 |
-| `I need a women's size 8 casual dress under $75.` | `null` / `semantic_track` | 提取 audience、size、style、category 和 budget；size 为 hard 文本约束。 |
-| `I need hiking shoes under $100, not leather and no heels.` | `null` / `semantic_track` | 生成 `material_exclude=[leather]` 与 `category_exclude=[shoes]`。 |
-| `Actually, ignore my earlier preference. What I need is a wool winter jacket.` | `null` / `semantic_track` | `override_detected=True`；不凭 `I need` 擅自判为 Buying。 |
-| `I'm looking for Shirts T-Shirts. A key requirement is: cotton.` | `null` / `semantic_track` | evaluator Buying 初始模板；保留 `cotton` hard constraint。 |
-| `I'm looking for Earrings Hoop, but I'm still exploring.` | `browsing` / `semantic_track` | evaluator Browsing 初始模板。 |
-| `I'm looking for earrings. A key requirement is: Snap closure.` | `null` / `semantic_track` | 词典外的 `Snap closure` 原文作为 hard `feature` 保留。 |
+| `I'm ready to buy shoes under $90; they must be black and Nike only.` | `buying` | `budget_max=90`、black/Nike 为 hard；只有 price、brand、category 进入 `filter_constraints`。 |
+| `I'm still exploring ideas for comfortable outfits for a summer wedding.` | `browsing` | `comfortable`、`summer`、`wedding` 为语义偏好。 |
+| `I want something for hiking under $100.` | `null` | 不把预算和 `I want` 强制判为 Buying。 |
+| `Show me casual dresses around $60.` | `null` | `budget_target=60` 是 soft，不错误地当作 price cap。 |
+| `I need a women's size 8 casual dress under $75.` | `null` | 提取 audience、size、style、category 和 budget；size 为 hard 文本约束。 |
+| `I need hiking shoes under $100, not leather and no heels.` | `null` | 生成 `material_exclude=[leather]` 与 `category_exclude=[shoes]`。 |
+| `Actually, ignore my earlier preference. What I need is a wool winter jacket.` | `null` | `override_detected=True`；不凭 `I need` 擅自判为 Buying。 |
+| `I'm looking for Shirts T-Shirts. A key requirement is: cotton.` | `null` | evaluator Buying 初始模板；保留 `cotton` hard constraint。 |
+| `I'm looking for Earrings Hoop, but I'm still exploring.` | `browsing` | evaluator Browsing 初始模板。 |
+| `I'm looking for earrings. A key requirement is: Snap closure.` | `null` | 词典外的 `Snap closure` 原文作为 hard `feature` 保留。 |
 
 这些 query 覆盖的是当前规则实现的关键分支；完整断言以单元测试源码为准。
 
@@ -80,23 +80,25 @@ python3 -m compileall -q intent_router scripts tests
 | Boundary | 0 | 10 | 0 |
 | Intent Override | 0 | 0 | 30 |
 
-对于 110 条未定意图，Router 仍输出：
+对于 110 条未定意图，Router 仍输出 slots、constraints 和 query signals，例如：
 
 ```python
 {
     "intent_type": None,
-    "route": "semantic_track",
-    "route_reason": "uncertain_fallback",
+    "hard_constraints": {...},
+    "soft_preferences": {...},
+    "keyword_query": "...",
+    "semantic_query": "...",
 }
 ```
 
-因此 Retrieval 每轮都有可执行路径；Router 不会因为 `$100`、`I want` 或单个 slot 就错误地强制判为 Buying。
+因此第二部分四路召回仍可消费当前轮信号；Router 不会因为 `$100`、`I want` 或单个 slot 就错误地强制判为 Buying。
 
 ## 5. 结果解释
 
-公开 Buying 模板为 `I'm looking for ... A key requirement is ...`，它表达了需求和约束，但没有表达 `ready to buy`、`buy now` 等购买承诺。因此 Router 保守地输出未定意图，同时保留公开的 hard constraint，并以高召回 `semantic_track` 执行。此处不将官方 `scenario_type=buying` 当作当前句子的 intent label。
+公开 Buying 模板为 `I'm looking for ... A key requirement is ...`，它表达了需求和约束，但没有表达 `ready to buy`、`buy now` 等购买承诺。因此 Router 保守地输出未定意图，同时保留公开的 hard constraint。此处不将官方 `scenario_type=buying` 当作当前句子的 intent label。
 
-这符合多轮设计：①负责当前轮理解和路由，③负责保存、合并、覆盖 slot；未定意图不能覆盖 state 中已有的确定意图。
+这符合多轮设计：①负责当前轮理解，③负责保存、合并、覆盖 slot；未定意图不能覆盖 state 中已有的确定意图。
 
 ## 6. 性能
 

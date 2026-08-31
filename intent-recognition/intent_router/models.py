@@ -5,7 +5,6 @@ from typing import Literal
 
 
 IntentType = Literal["buying", "browsing"] | None
-Route = Literal["filter_track", "semantic_track"]
 
 
 @dataclass(frozen=True)
@@ -16,8 +15,6 @@ class IntentResult:
     normalized_query: str
     intent_type: IntentType
     intent_confidence: float
-    route: Route
-    route_reason: str
     slots: dict[str, list[str] | float]
     hard_constraints: dict[str, list[str] | float]
     filter_constraints: dict[str, list[str] | float]

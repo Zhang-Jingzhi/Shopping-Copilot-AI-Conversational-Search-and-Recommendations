@@ -1,6 +1,6 @@
-# Intent Router & Query Understanding
+# Intent Understanding
 
-`intent_router.IntentRouter` is the team-one current-turn understanding component. It does not retrieve products, mutate session state, rank candidates, or choose clarification questions. It parses only what the user explicitly says, so a use case such as `for hiking` never invents attributes such as `waterproof`.
+`intent_router.IntentRouter` is the team-one current-turn understanding component. It does not retrieve products, choose retrieval routes, mutate session state, rank candidates, or choose clarification questions. It parses only what the user explicitly says, so a use case such as `for hiking` never invents attributes such as `waterproof`.
 
 ## Initialization and use
 
@@ -22,8 +22,6 @@ The catalog-backed lexicons are loaded from the real `store` and `categories` fi
 | --- | --- |
 | `intent_type` | `buying`, `browsing`, or `None` for an incomplete current-turn intent. |
 | `intent_confidence` | Deterministic confidence in the current-turn intent decision. |
-| `route` | Always executable: `filter_track` or `semantic_track`. |
-| `route_reason` | `confirmed_buying`, `confirmed_browsing`, or `uncertain_fallback`. |
 | `slots` | Explicitly mentioned category, brand, color, material, budget, size, style, audience, use case, feature, and exclusion slots. |
 | `hard_constraints` | Explicit non-negotiable user constraints; these are not automatically metadata filters. |
 | `filter_constraints` | Only hard constraints backed by fixed catalog metadata: category, brand/store, and price bounds. |
@@ -32,7 +30,7 @@ The catalog-backed lexicons are loaded from the real `store` and `categories` fi
 | `override_detected` | Signal for State & Memory to replace stale values. |
 | `ambiguity_flags`, `decision_evidence` | Diagnostics for policy and debugging. |
 
-The Router is deliberately not a keyword binary classifier. Budget, category, slot count, and `I want` are weak signals. Strong purchase-commitment phrases produce `buying/filter_track`; strong exploration phrases produce `browsing/semantic_track`. An incomplete query can have `intent_type=None` while still receiving the executable `semantic_track` fallback to preserve recall.
+The Router is deliberately not a keyword binary classifier. Budget, category, slot count, and `I want` are weak signals. Strong purchase-commitment phrases produce `buying`; strong exploration phrases produce `browsing`. An incomplete query can have `intent_type=None` while still returning slots and constraints for downstream modules.
 
 ## Constraint semantics and catalog alignment
 

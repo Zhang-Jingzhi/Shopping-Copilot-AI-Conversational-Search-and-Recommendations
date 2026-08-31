@@ -2,7 +2,7 @@
 
 This folder contains the first part of the Shopping Copilot project: intent recognition for conversational shopping search.
 
-The module reads a shopper's message, identifies the user's intent, extracts product-search attributes, and decides whether the query should use a strict filter-based route or a broader semantic-search route.
+The module reads a shopper's message, identifies the user's intent, and extracts product-search attributes for downstream retrieval and multi-turn dialog modules.
 
 ## What This Part Does
 
@@ -10,14 +10,14 @@ The module reads a shopper's message, identifies the user's intent, extracts pro
 - Detects override signals such as "actually", "instead", or "ignore my earlier preference"
 - Extracts product-related slots, including `category`, `color`, `material`, `size`, `style`, `brand`, `budget`, `feature`, `use_case`, and exclusions
 - Separates hard constraints from soft preferences
-- Produces routing decisions: `filter_track` or `semantic_track`
+- Produces keyword and semantic query signals for downstream recall
 - Returns ambiguity flags when the message needs more clarification
 
 ## Main Files
 
 ```text
 intent_router/
-  router.py                  intent classification, slot extraction, and routing logic
+  router.py                  intent classification and slot extraction logic
   models.py                  result data model
   catalog_lexicon.py         helpers for loading catalog brands and categories
 
@@ -81,7 +81,6 @@ The router returns an `IntentResult` containing:
 
 - original and normalized query text
 - intent type and confidence
-- route and route reason
 - extracted slots
 - hard constraints
 - filter constraints
