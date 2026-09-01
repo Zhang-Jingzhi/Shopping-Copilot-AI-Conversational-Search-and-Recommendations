@@ -6,7 +6,7 @@
 
 [Run locally](#run-it-locally) · [Read the technical report](docs/submission/TECHNICAL_REPORT.md) · [View the Devpost story](docs/submission/DEVPOST_ABOUT_PROJECT.md) · [Read in Chinese](README_ZH.md) · [Record a demo](#record-a-demo)
 
-> **Public demo video:** the recorded walkthrough is ready locally; add the public YouTube URL here before final submission. Its narration and upload description are in [the video materials](docs/submission/YOUTUBE_DESCRIPTION.md).
+> **Public demo video:** https://youtu.be/P0QWGveKd6A.
 
 ## Why Shopping Copilot
 
