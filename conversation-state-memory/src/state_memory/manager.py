@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from .catalog_lexicon import CatalogLexicon
 from .context_program import ContextProgrammer
 from .extractor import RuleBasedExtractor
 from .models import ContextSnapshot, SessionState, UserProfile
@@ -10,13 +13,32 @@ from .state_machine import DynamicStateMachine
 class StateMemoryManager:
     """In-memory state manager; persist sessions/profiles outside this class if needed."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path | None = None,
+        catalog_cache_path: str | Path | None = None,
+    ) -> None:
         self.sessions: dict[str, SessionState] = {}
         self.profiles: dict[str, UserProfile] = {}
-        self.extractor = RuleBasedExtractor()
+        resolved_catalog = self._resolve_catalog_path(catalog_path)
+        lexicon = (
+            CatalogLexicon.from_jsonl(resolved_catalog, cache_path=catalog_cache_path)
+            if resolved_catalog
+            else None
+        )
+        self.extractor = RuleBasedExtractor(catalog_lexicon=lexicon)
         self.state_machine = DynamicStateMachine()
         self.profile_distiller = ProfileDistiller()
         self.context_programmer = ContextProgrammer()
+
+    @staticmethod
+    def _resolve_catalog_path(catalog_path: str | Path | None) -> Path | None:
+        if catalog_path is not None:
+            candidate = Path(catalog_path)
+            return candidate if candidate.is_file() else None
+        repository_root = Path(__file__).resolve().parents[3]
+        candidate = repository_root / "official_kit" / "data" / "catalog.jsonl"
+        return candidate if candidate.is_file() else None
 
     def update(
         self,

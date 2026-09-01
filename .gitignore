@@ -227,3 +227,25 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Local downloads, official reference kit, and evaluation artifacts.
+/.local/
+/official_kit/data/catalog.jsonl
+
+# Downloaded public kit and locally generated submission evaluation outputs.
+/competition_kit/
+/results/
+
+# Local-only development assets: never publish on integration/submission branches.
+.DS_Store
+/.vscode/
+/synthetic-data-3021/
+/ranking_pipeline/checkpoints/
+/retrieval-and-reranking/resources/
+/docs/integration/integrated-breakpoint-snapshots.json
+/docs/integration/BREAKPOINT_EXPECTATIONS_*.md
+/docs/integration/DEBUG_*.md
+/docs/integration/INTEGRATED_PIPELINE_DEBUG.md
+/docs/integration/source-manifest.json
+/docs/integration/sync-manifest-*.json
+/scripts/debug_integrated_session.py
+/scripts/debug_single_session.py
