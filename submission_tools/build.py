@@ -9,8 +9,9 @@ import zipfile
 from .common import ROOT, CODE_FOLDERS, sha256
 
 DOCUMENTS = (
-    ".gitignore", "README.md", "requirements.txt", "DATA_ATTRIBUTION.md",
+    ".gitignore", "README.md", "README_ZH.md", "requirements.txt", "DATA_ATTRIBUTION.md",
     "docs/submission/TECHNICAL_REPORT.md", "docs/submission/DEVPOST.md",
+    "docs/submission/DEVPOST_ABOUT_PROJECT.md", "docs/submission/VIDEO_NARRATION_EN.txt",
     "docs/submission/YOUTUBE_PLAN_ZH.md", "docs/submission/YOUTUBE_DESCRIPTION.md",
     "docs/submission/CONTRIBUTIONS.md", "docs/submission/RELEASE_CHECKLIST.md",
     "docs/submission/public200.json", "docs/submission/reproduction.json",
@@ -19,6 +20,7 @@ DOCUMENTS = (
     "ranking_pipeline/results/question-limit-1-lite.json",
     "ranking_pipeline/results/question-limit-ablation-lite.json",
     "scripts/reproduce_question_limit_ablation.py",
+    "submission_tools/mux_narration.m",
 )
 
 

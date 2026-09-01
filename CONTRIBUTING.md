@@ -21,10 +21,11 @@ allows it. The repository owner should review and merge pull requests.
 
 - `intent-recognition/` understands the current user message; it does not own
   session state.
-- The future state/dialogue component owns multi-turn accumulation and decides
-  whether requirements are complete.
-- `retrieval-and-reranking/` starts from complete disclosed requirements,
-  generates exactly 50 candidates, and reranks only those candidates to Top10.
+- `conversation-state-memory/` owns multi-turn accumulation, overrides,
+  exclusions, and the context supplied to downstream modules.
+- `retrieval-and-reranking/` defines the candidate-retrieval contracts and
+  routes. The submitted integrated profile supplies a recall-compatible Top-50
+  pool before CPU ranking returns up to Top-10.
 - Offline evaluators may join labels after inference. Runtime modules must not
   read targets, hidden intent cards, private holdout data, or future messages.
 
