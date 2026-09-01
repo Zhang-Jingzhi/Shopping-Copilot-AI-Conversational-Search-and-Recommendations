@@ -43,19 +43,17 @@ class RankAfterFirstAgent(RankingAgent):
         )
         result = self.reranker.rerank(candidate_set, top_k=top_k)
         result.validate_against(candidate_set, top_k=top_k)
+        ask_attribute = None
         if self._policy_enabled and turn < 10:
             decision = self._policy_decision(result, session_id)
             if decision is not None and decision.action == "clarify":
-                self._record_asked(session_id, decision.ask_attribute)
-                return {
-                    "message": decision.message,
-                    "ask_attribute": decision.ask_attribute,
-                    "recommendations": [],
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0},
-                }
+                ask_attribute = decision.ask_attribute
+        if ask_attribute is None:
+            ask_attribute = self._next_ask_attribute(session_id, collector)
+        self._record_asked(session_id, ask_attribute)
         return {
-            "message": "Here are the best matches for all requirements you shared.",
-            "ask_attribute": None,
+            "message": self._recommendation_message(ask_attribute),
+            "ask_attribute": ask_attribute,
             "recommendations": [
                 {"parent_asin": candidate.parent_asin}
                 for candidate in result.ranked_candidates

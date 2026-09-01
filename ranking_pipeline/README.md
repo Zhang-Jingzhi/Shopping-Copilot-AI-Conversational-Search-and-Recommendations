@@ -130,8 +130,8 @@ python -m ranking_pipeline.train_reranker `
 starting from scratch instead of continuing from LoRA, omit
 `--adapter-checkpoint`.
 
-Epoch and best checkpoints are written as siblings of `--output`, not inside
-that directory: `<output>_epochN` and `<output>_best_pubaccX.XXX`.
+Epoch and best checkpoints are written inside the run output directory:
+`<output>/epoch_N` and `<output>/best_pubaccX.XXX`.
 
 ```powershell
 python -m ranking_pipeline.train_reranker `

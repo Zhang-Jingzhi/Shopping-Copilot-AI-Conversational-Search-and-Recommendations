@@ -15,8 +15,10 @@ from techjam_agent.agent import Agent as BaseAgent
 from techjam_agent.ranking import LockedWeightedRrfTop10Reranker
 
 from ranking_pipeline.contextual_ranking import (
+    CLARIFICATION_MESSAGES,
     HybridContextualReranker,
     RecommendationClarificationPolicy,
+    choose_clarification_attribute,
 )
 from ranking_pipeline.memory_context import (
     intent_to_context,
@@ -158,6 +160,19 @@ class RankingAgent(BaseAgent):
         if attribute not in asked:
             asked.append(attribute)
 
+    def _next_ask_attribute(self, session_id: str, collector) -> str:
+        return choose_clarification_attribute(
+            collector.requirements(),
+            asked_attributes=tuple(self._asked_attributes.get(session_id, ())),
+            over_general=True,
+        )
+
+    def _recommendation_message(self, ask_attribute: str) -> str:
+        return (
+            "Here are the best matches for all requirements you shared. "
+            f"{CLARIFICATION_MESSAGES[ask_attribute]}"
+        )
+
     def respond(
         self,
         session_id: str,
@@ -191,19 +206,17 @@ class RankingAgent(BaseAgent):
         )
         result = self.reranker.rerank(candidate_set, top_k=top_k)
         result.validate_against(candidate_set, top_k=top_k)
+        ask_attribute = None
         if self._policy_enabled and turn < 10:
             decision = self._policy_decision(result, session_id)
             if decision is not None and decision.action == "clarify":
-                self._record_asked(session_id, decision.ask_attribute)
-                return {
-                    "message": decision.message,
-                    "ask_attribute": decision.ask_attribute,
-                    "recommendations": [],
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0},
-                }
+                ask_attribute = decision.ask_attribute
+        if ask_attribute is None:
+            ask_attribute = self._next_ask_attribute(session_id, collector)
+        self._record_asked(session_id, ask_attribute)
         return {
-            "message": "Here are the best matches for all requirements you shared.",
-            "ask_attribute": None,
+            "message": self._recommendation_message(ask_attribute),
+            "ask_attribute": ask_attribute,
             "recommendations": [
                 {"parent_asin": candidate.parent_asin}
                 for candidate in result.ranked_candidates

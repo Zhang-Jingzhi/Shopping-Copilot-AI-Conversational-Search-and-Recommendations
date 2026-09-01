@@ -23,6 +23,10 @@ from techjam_agent.dialogue import RequirementsCollector as BaseRequirementsColl
 from techjam_agent.ranking import LockedWeightedRrfTop10Reranker
 
 from ranking_pipeline.context import ShortTermSummary, parse_override_message
+from ranking_pipeline.contextual_ranking import (
+    CLARIFICATION_MESSAGES,
+    choose_clarification_attribute,
+)
 
 
 INITIAL_OVERRIDE_RE = re.compile(
@@ -234,11 +238,13 @@ class OverrideAwareAgent(BaseAgent):
             candidate_generator=candidate_generator,
             reranker=LockedWeightedRrfTop10Reranker(),
         )
+        self._asked_attributes: dict[str, list[str]] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         self._sessions[session_id] = OverrideAwareRequirementsCollector(
             user_profile=user_profile
         )
+        self._asked_attributes[session_id] = []
 
     def respond(
         self,
@@ -252,6 +258,7 @@ class OverrideAwareAgent(BaseAgent):
             raise RuntimeError("reset must be called before respond")
         collector.observe(user_message, turn)
         if turn <= 2:
+            self._record_asked(session_id, "other")
             return {
                 "message": "Please share any other requirements that matter.",
                 "ask_attribute": "other",
@@ -263,15 +270,34 @@ class OverrideAwareAgent(BaseAgent):
         )
         result = self.reranker.rerank(candidate_set, top_k=top_k)
         result.validate_against(candidate_set, top_k=top_k)
+        ask_attribute = self._next_ask_attribute(session_id, collector)
+        self._record_asked(session_id, ask_attribute)
         return {
-            "message": "Here are the best matches for all requirements you shared.",
-            "ask_attribute": None,
+            "message": (
+                "Here are the best matches for all requirements you shared. "
+                f"{CLARIFICATION_MESSAGES[ask_attribute]}"
+            ),
+            "ask_attribute": ask_attribute,
             "recommendations": [
                 {"parent_asin": candidate.parent_asin}
                 for candidate in result.ranked_candidates
             ],
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
+
+    def _next_ask_attribute(self, session_id: str, collector) -> str:
+        return choose_clarification_attribute(
+            collector.requirements(),
+            asked_attributes=tuple(self._asked_attributes.get(session_id, ())),
+            over_general=True,
+        )
+
+    def _record_asked(self, session_id: str, attribute: str | None) -> None:
+        if attribute is None:
+            return
+        asked = self._asked_attributes.setdefault(session_id, [])
+        if attribute not in asked:
+            asked.append(attribute)
 
 
 __all__ = ["OverrideAwareAgent", "OverrideAwareRequirementsCollector"]

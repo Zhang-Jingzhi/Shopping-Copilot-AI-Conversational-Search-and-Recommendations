@@ -197,13 +197,11 @@ def build_run_output(args: argparse.Namespace) -> Path:
 
 
 def build_epoch_output(run_output: Path, epoch: int) -> Path:
-    return run_output.with_name(run_output.name + f"_epoch{epoch}")
+    return run_output / f"epoch_{epoch}"
 
 
 def build_best_output(run_output: Path, best_public_accuracy: float) -> Path:
-    return run_output.with_name(
-        run_output.name + f"_best_pubacc{best_public_accuracy:.3f}"
-    )
+    return run_output / f"best_pubacc{best_public_accuracy:.3f}"
 
 
 def _save_checkpoint(model, tokenizer, output: Path, summary: dict) -> None:
